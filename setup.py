@@ -216,11 +216,14 @@ def detect_env():
 
     Inside proot-distro ubuntu, pkg is mounted from Termux and pkg --version
     succeeds, but installing Termux-only packages there fails. Check apt-get
-    first: if it exists, we're on Ubuntu/proot-distro (native glibc, apt repos).
-    Only use pkg if apt-get isn't available (real Termux).
+    first (multiple common paths, since shutil.which may not find it in the
+    Python subprocess PATH): if apt-get exists, we're on Ubuntu/proot-distro
+    (native glibc, apt repos). Only use pkg if apt-get isn't available
+    (real Termux).
     """
-    if which("apt-get"):
-        return "linux"
+    for apt_path in ("/usr/bin/apt-get", "/bin/apt-get", "apt-get"):
+        if os.path.exists(apt_path) or which(apt_path):
+            return "linux"
     if which("pkg"):
         try:
             run(["pkg", "--version"], capture=True, check=True)
@@ -372,14 +375,17 @@ def install_opencode_cli():
     env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
 
-    # Always ensure setup.py is in BASE_DIR so opencode-proxy can find it
-    try:
-        shutil.copy2(Path(__file__).resolve(), BASE_DIR / "setup.py")
-    except Exception:
-        pass
+    # Always (re)write the wrapper based on current environment detection
+    if env == "termux":
+        OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
+    else:
+        OPENCODE_WRAPPER.write_text(f"""#!/usr/bin/env bash
+exec "{OPENCODE_BIN}" "$@"
+""")
+    os.chmod(OPENCODE_WRAPPER, 0o755)
 
     if OPENCODE_BIN.exists():
-        cprint("OpenCode CLI already installed — skipping", BLUE)
+        cprint("OpenCode CLI already installed — skipping download", BLUE)
         return
     url = "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.5.tgz"
     tmp = LOCAL_BIN / "opencode-cli.tgz"
@@ -395,15 +401,6 @@ def install_opencode_cli():
         shutil.copy2(binary, OPENCODE_BIN)
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
-
-    # Write the opencode wrapper — grun only on Termux, direct exec on Linux
-    if env == "termux":
-        OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
-    else:
-        OPENCODE_WRAPPER.write_text(f"""#!/usr/bin/env bash
-exec "{OPENCODE_BIN}" "$@"
-""")
-    os.chmod(OPENCODE_WRAPPER, 0o755)
 
 
 def write_opencode_config():
@@ -576,13 +573,19 @@ def show_logs():
 
 def do_install():
     check_arch()
-    # Ensure BASE_DIR exists and setup.py is copied there so opencode-proxy
+    # Ensure BASE_DIR exists and setup.py is there so opencode-proxy
     # can always find it (even on re-runs where install_opencode_cli skips early).
+    # Download from GitHub raw URL since __file__ is <stdin> when piped.
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copy2(Path(__file__).resolve(), BASE_DIR / "setup.py")
-    except Exception:
-        pass
+    setup_py_dest = BASE_DIR / "setup.py"
+    if not setup_py_dest.exists():
+        try:
+            urllib.request.urlretrieve(
+                "https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py",
+                setup_py_dest,
+            )
+        except Exception:
+            pass
     install_packages()
     install_engine()
     write_daemon_spawner()

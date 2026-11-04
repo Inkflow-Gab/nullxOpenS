@@ -84,6 +84,13 @@ opencode
 | `opencode-unlimited stop` | Stop proxy + CLI |
 | `opencode-unlimited restart` | Restart proxy + CLI |
 | `opencode-unlimited status` | Check both proxy and CLI |
+| `opencode-proxy skills list` | List installed skills |
+| `opencode-proxy skills install` | Install built-in skills (web-design, frontend-dev, backend-dev, fullstack-dev, debugging, code-review, api-design, sql-database) |
+| `opencode-proxy skills show <name>` | Show skill details & system prompt |
+| `opencode-proxy skills add <name>` | Create a custom skill |
+| `opencode-proxy skills remove <name>` | Remove a skill |
+| `opencode-proxy models list` | List all detected free models with rankings |
+| `opencode-proxy models best` | Show top 3 free models |
 
 ---
 
@@ -118,6 +125,48 @@ Android Device (Termux / Ubuntu proot-distro)
 | `mimo-v2.6-flash-free` | Compact quick assistant | 128K |
 | `flint-40b-free` | Open-weight foundation | 128K |
 | `pulse-alpha-free` | Multimodal input | 1M |
+
+---
+
+## Skills
+
+OpenCode UNLIMITED includes built-in **skills** — pre-configured system prompts for specific tasks. Install them with:
+
+```bash
+opencode-proxy skills install
+```
+
+Then view or add them:
+
+```bash
+opencode-proxy skills list
+opencode-proxy skills show web-design
+opencode-proxy skills add my-skill
+```
+
+### Built-in Skills
+
+| Skill | Category | Description |
+|-------|----------|-------------|
+| `web-design` | design | UI/UX, color theory, typography, responsive layouts |
+| `frontend-dev` | development | React, Vue, Angular, Svelte, TypeScript, modern JS |
+| `backend-dev` | development | Node.js, Python, Go, databases, APIs, authentication |
+| `fullstack-dev` | development | End-to-end web apps, deployment, DevOps |
+| `debugging` | utilities | Find and fix bugs fast in any language |
+| `code-review` | utilities | Security, performance, best practices, maintainability |
+| `api-design` | development | REST, GraphQL, OpenAPI, versioning, auth |
+| `sql-database` | development | Schemas, queries, optimization, migrations |
+
+Use a skill's system prompt in OpenCode to get specialized behavior for that task.
+
+## Model Detection
+
+OpenCode UNLIMITED detects free models from the OpenCode gateway and ranks them by quality and context window:
+
+```bash
+opencode-proxy models list
+opencode-proxy models best
+```
 
 ---
 

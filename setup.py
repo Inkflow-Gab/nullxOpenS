@@ -212,13 +212,18 @@ OPENCODE_JSONC_CONTENT = """{
 
 
 def detect_env():
-    """Return 'termux' if running on Termux, else 'linux'."""
-    # TERMUX_VERSION is set by Termux itself — most reliable indicator
-    if os.environ.get("TERMUX_VERSION"):
-        return "termux"
-    # Check the Termux pkg binary specifically (not just any 'pkg' on PATH)
-    if Path("/data/data/com.termux/files/usr/bin/pkg").exists():
-        return "termux"
+    """Return 'termux' only if pkg actually works; else 'linux'.
+
+    Inside proot-distro ubuntu, TERMUX_VERSION and the Termux pkg path
+    are inherited from the parent Termux, but pkg doesn't really work
+    for installing Termux packages there. We verify by trying pkg itself.
+    """
+    if which("pkg"):
+        try:
+            run(["pkg", "--version"], capture=True, check=True)
+            return "termux"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pass
     return "linux"
 
 
@@ -254,20 +259,37 @@ def install_packages():
     cprint(f"Installing dependencies: {' '.join(needed)}", BLUE)
 
     if env == "termux":
-        run(["pkg", "update", "-y"])
+        try:
+            run(["pkg", "update", "-y"])
+        except subprocess.CalledProcessError:
+            cprint("pkg update failed — falling back to apt-get", YELLOW)
+            env = "linux"
+
+    if env == "termux":
         # Critical packages must succeed; Termux-only ones are best-effort
         critical = [p for p in needed if p not in TERMUX_ONLY]
         optional = [p for p in needed if p in TERMUX_ONLY]
         if critical:
-            run(["pkg", "install", "-y"] + critical)
+            try:
+                run(["pkg", "install", "-y"] + critical)
+            except subprocess.CalledProcessError as e:
+                cprint(f"Critical pkg install failed: {e}", RED)
+                env = "linux"
         for p in optional:
             try:
                 run(["pkg", "install", "-y", p])
             except subprocess.CalledProcessError:
                 cprint(f"Skipping optional package: {p}", YELLOW)
-    else:
-        run(["apt-get", "update", "-y"])
-        run(["apt-get", "install", "-y"] + needed)
+
+    if env == "linux":
+        try:
+            run(["apt-get", "update", "-y"])
+        except subprocess.CalledProcessError:
+            cprint("apt-get update failed — continuing anyway", YELLOW)
+        try:
+            run(["apt-get", "install", "-y"] + needed)
+        except subprocess.CalledProcessError as e:
+            cprint(f"Package install had issues: {e} — continuing anyway", YELLOW)
 
 
 def download(url, dest):

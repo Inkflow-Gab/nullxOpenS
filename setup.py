@@ -314,19 +314,21 @@ def download(url, dest):
     print()
 
 
-def extract_named(tar_path, dest_dir, name_suffix):
+def extract_tar(tar_path, dest_dir):
+    """Safely extract a tarball to dest_dir (handles Python 3.12+ filters)."""
     with tarfile.open(tar_path, "r:gz") as tar:
-        members = tar.getmembers()
-        for member in members:
-            if member.name.endswith(name_suffix) and not member.isdir():
-                member.name = Path(member.name).name
-                tar.extract(member, dest_dir)
-                return
-        names = [m.name for m in members if not m.isdir()]
-        cprint(f"Tarball contents: {names}", YELLOW)
-        raise FileNotFoundError(
-            f"No file ending with '{name_suffix}' found in {tar_path}"
-        )
+        try:
+            tar.extractall(dest_dir, filter="data")
+        except TypeError:
+            tar.extractall(dest_dir)
+
+def find_binary(root_dir, name):
+    """Find a file by name anywhere under root_dir."""
+    for root, _dirs, files in os.walk(root_dir):
+        for f in files:
+            if f == name:
+                return Path(root) / f
+    return None
 
 def install_engine():
     BIN_DIR.mkdir(parents=True, exist_ok=True)
@@ -335,7 +337,15 @@ def install_engine():
         return
     tmp = BASE_DIR / "opencode2api.tar.gz"
     download(ENGINE_URL, tmp)
-    extract_named(tmp, BIN_DIR, "opencode2api")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        extract_tar(tmp, td)
+        binary = find_binary(td, "opencode2api")
+        if not binary:
+            cprint("Failed to find opencode2api binary in tarball", RED)
+            tmp.unlink(missing_ok=True)
+            return
+        shutil.copy2(binary, ENGINE_BIN)
     os.chmod(ENGINE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
 
@@ -364,23 +374,15 @@ def install_opencode_cli():
     url = "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.5.tgz"
     tmp = LOCAL_BIN / "opencode-cli.tgz"
     download(url, tmp)
-    # Try common tarball layouts for the opencode binary
-    extracted = False
-    for suffix in ("package/bin/opencode", "bin/opencode", "opencode"):
-        try:
-            extract_named(tmp, LOCAL_BIN, suffix)
-            extracted = True
-            break
-        except FileNotFoundError:
-            continue
-    if not extracted:
-        cprint("Failed to extract opencode binary from tarball", RED)
-        tmp.unlink(missing_ok=True)
-        return
-    # extract_named saves as basename (opencode); rename to opencode-bin like install.sh did
-    extracted_file = LOCAL_BIN / "opencode"
-    if extracted_file.exists() and not OPENCODE_BIN.exists():
-        extracted_file.rename(OPENCODE_BIN)
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        extract_tar(tmp, td)
+        binary = find_binary(td, "opencode")
+        if not binary:
+            cprint("Failed to find opencode binary in tarball", RED)
+            tmp.unlink(missing_ok=True)
+            return
+        shutil.copy2(binary, OPENCODE_BIN)
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
 

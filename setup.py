@@ -222,8 +222,15 @@ def fetch_all_skills() -> list:
     return skills
 
 
-def download_skill(skill_info: dict) -> dict | None:
-    """Download and parse a single SKILL.md from the repo."""
+def download_skill(skill_info: dict, idx: int = 0, total: int = 0) -> dict | None:
+    """Download and parse a single SKILL.md from the repo with progress bar."""
+    label = skill_info["name"]
+    bar_len = 25
+    if total > 0:
+        percent = min(idx * 100 / total, 100)
+        filled = int(bar_len * percent / 100)
+        bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+        print(f"\r  {CYAN}[skills]{NC} {bar} {percent:5.1f}%  downloading {label}", end="", flush=True)
     try:
         with urllib.request.urlopen(skill_info["download_url"], timeout=30) as resp:
             content = resp.read().decode("utf-8", errors="replace")
@@ -254,15 +261,17 @@ def write_skills(dry_run=False):
 
     info(f"Found {len(skills)} skills in repo.")
     count = 0
-    for skill_info in skills:
+    for i, skill_info in enumerate(skills, 1):
         skill_file = SKILLS_DIR / f"{skill_info['name']}.json"
         if skill_file.exists():
             continue
-        skill = download_skill(skill_info)
+        skill = download_skill(skill_info, i, len(skills))
         if not skill or not skill["name"]:
             continue
         skill_file.write_text(json.dumps(skill, indent=2))
         count += 1
+    # Clear the progress line and show completion
+    print(f"\r  {GREEN}[✓]{NC} Done — installed {count}/{len(skills)} skills to {SKILLS_DIR}      ")
     if count > 0:
         success(f"Installed {count} skills from claude-skills repo.")
     else:

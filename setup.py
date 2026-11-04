@@ -377,6 +377,10 @@ def install_opencode_cli():
         cprint("Failed to extract opencode binary from tarball", RED)
         tmp.unlink(missing_ok=True)
         return
+    # extract_named saves as basename (opencode); rename to opencode-bin like install.sh did
+    extracted_file = LOCAL_BIN / "opencode"
+    if extracted_file.exists() and not OPENCODE_BIN.exists():
+        extracted_file.rename(OPENCODE_BIN)
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
 

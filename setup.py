@@ -316,15 +316,23 @@ def download(url, dest):
 
 def extract_named(tar_path, dest_dir, name_suffix):
     with tarfile.open(tar_path, "r:gz") as tar:
-        for member in tar.getmembers():
+        members = tar.getmembers()
+        for member in members:
             if member.name.endswith(name_suffix) and not member.isdir():
                 member.name = Path(member.name).name
                 tar.extract(member, dest_dir)
-                break
-
+                return
+        names = [m.name for m in members if not m.isdir()]
+        cprint(f"Tarball contents: {names}", YELLOW)
+        raise FileNotFoundError(
+            f"No file ending with '{name_suffix}' found in {tar_path}"
+        )
 
 def install_engine():
     BIN_DIR.mkdir(parents=True, exist_ok=True)
+    if ENGINE_BIN.exists():
+        cprint("opencode2api already installed — skipping engine download", BLUE)
+        return
     tmp = BASE_DIR / "opencode2api.tar.gz"
     download(ENGINE_URL, tmp)
     extract_named(tmp, BIN_DIR, "opencode2api")
@@ -351,11 +359,24 @@ def install_opencode_cli():
     env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     if OPENCODE_BIN.exists():
+        cprint("OpenCode CLI already installed — skipping", BLUE)
         return
     url = "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.5.tgz"
     tmp = LOCAL_BIN / "opencode-cli.tgz"
     download(url, tmp)
-    extract_named(tmp, LOCAL_BIN, "package/bin/opencode")
+    # Try common tarball layouts for the opencode binary
+    extracted = False
+    for suffix in ("package/bin/opencode", "bin/opencode", "opencode"):
+        try:
+            extract_named(tmp, LOCAL_BIN, suffix)
+            extracted = True
+            break
+        except FileNotFoundError:
+            continue
+    if not extracted:
+        cprint("Failed to extract opencode binary from tarball", RED)
+        tmp.unlink(missing_ok=True)
+        return
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
 

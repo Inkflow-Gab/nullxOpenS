@@ -1,23 +1,30 @@
 # OpenCode Termux Unlimited
 
-Turnkey setup for running the OpenCode CLI natively on Android (Termux) backed by a rotating Cloudflare WARP egress pool — no root, no containers, no external servers.
+```
+.__   __.   ______   .__   __.  __  .__   __.      ___      .______       _______  __    __  
+|  \ |  |  /  __  \  |  \ |  | |  | |  \ |  |     /   \     |   _  \     |   ____||  |  |  | 
+|   \|  | |  |  |  | |   \|  | |  | |   \|  |    /  ^  \    |  |_)  |    |  |__   |  |  |  | 
+|  . `  | |  |  |  | |  . `  | |  | |  . `  |   /  /_\  \   |   ___/     |   __|  |  |  |  | 
+|  |\   | |  `--'  | |  |\   | |  | |  |\   |  /  _____  \  |  |         |  |____ |  `--'  | 
+|__| \__|  \______/  |__| \__| |__| |__| \__| /__/     \__\ | _|         |_______| \______/ 
+```
 
 <p align="center">
-  <img src="assets/banner.png" alt="OpenCode Termux Unlimited banner" width="100%">
+  <a href="#"><img src="https://img.shields.io/badge/platform-Android%20%7C%20Termux%20ARM64-green?style=for-the-badge" alt="platform"></a>
+  <a href="#"><img src="https://img.shields.io/badge/engine-opencode2api%20v1.4.6-blue?style=for-the-badge" alt="engine"></a>
+  <a href="#"><img src="https://img.shields.io/badge/opencode-v1.19.5-purple?style=for-the-badge" alt="opencode"></a>
+  <a href="#"><img src="https://img.shields.io/badge/license-MIT-red?style=for-the-badge" alt="license"></a>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-Android%20%7C%20Termux%20ARM64-green.svg" alt="platform">
-  <img src="https://img.shields.io/badge/engine-opencode2api%20v1.4.6-blue.svg" alt="engine">
-  <img src="https://img.shields.io/badge/opencode-v1.19.5-purple.svg" alt="opencode">
-  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="license">
+  <b>Turnkey setup for OpenCode CLI on Android (Termux)</b> — rotating Cloudflare WARP egress pool, no root, no containers, no external servers.
 </p>
 
 ---
 
 ## About
 
-A minimal, all-in-one Python setup that installs and manages the `opencode2api` gateway plus the OpenCode CLI on Termux. Rotates through Cloudflare WARP IPv6 exits to eliminate per-IP rate limits on the anonymous free tier.
+A minimal, all-in-one Python setup that installs and manages the `opencode2api` gateway plus the OpenCode CLI. Works on native Termux **and** inside `proot-distro login ubuntu` — it auto-detects `pkg` vs `apt` and skips Termux-only packages when not on Termux.
 
 Built and maintained by **null**.
 
@@ -25,9 +32,9 @@ Built and maintained by **null**.
 
 ## Features
 
-- One-command setup via `setup.py`
+- One-command setup via `setup.py` (Termux + Ubuntu/proot-distro)
 - `opencode2api` v1.4.6 gateway with WARP IPv6 egress rotation
-- OpenCode CLI v1.19.5 running natively via `glibc-runner` (`grun`)
+- OpenCode CLI v1.19.5 via `glibc-runner` (`grun`)
 - Double-fork daemon spawner — survives terminal close
 - OpenAI-compatible `/v1` endpoint at `http://127.0.0.1:8080/v1`
 - Web dashboard at `http://127.0.0.1:8081`
@@ -38,7 +45,13 @@ Built and maintained by **null**.
 
 ## Quick Start
 
-Run this inside Termux:
+**Inside Termux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
+```
+
+**Inside `proot-distro login ubuntu`:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
@@ -79,10 +92,10 @@ opencode
 ## Architecture
 
 ```
-Android Device (Termux)
+Android Device (Termux / Ubuntu proot-distro)
 ├── OpenCode CLI (TUI)          -> grun -> opencode-bin
 │      └── HTTP 127.0.0.1:8080/v1
-├── opencode2api Gateway        -> termux-chroot -> WARP IPv6 pool
+├── opencode2api Gateway        -> chroot -> WARP IPv6 pool
 │      ├── rotating egress on 429/403
 │      └── web dashboard :8081
 └── Outbound WireGuard UDP (2408)

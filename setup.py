@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""OpenCode Termux Unlimited — all-in-one setup & controller (Android/Termux aarch64)."""
+"""OpenCode Termux Unlimited — all-in-one setup & controller.
+
+Works on native Termux (pkg) and inside proot-distro Ubuntu (apt).
+Detects the environment automatically and skips Termux-only packages when
+not running on Termux.
+"""
 
 import os
 import sys
@@ -16,6 +21,7 @@ RED = "\033[0;31m"
 GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
 YELLOW = "\033[1;33m"
+CYAN = "\033[0;36m"
 NC = "\033[0m"
 
 
@@ -23,12 +29,12 @@ def cprint(msg, color=NC):
     print(f"{color}{msg}{NC}")
 
 
-def run(cmd, check=True, capture=False):
-    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
-
-
 def which(cmd):
     return shutil.which(cmd)
+
+
+def run(cmd, check=True, capture=False):
+    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
 
 
 HOME = Path.home()
@@ -56,7 +62,10 @@ API_URL = "http://127.0.0.1:8080"
 API_KEY = "local-test-key"
 ARCH = os.uname().machine
 
-REQUIRED_PKGS = ["curl", "jq", "proot", "termux-tools", "python"]
+# Termux-only packages (not available in Ubuntu/Debian apt)
+TERMUX_ONLY = {"termux-tools", "glibc-repo", "glibc-runner"}
+
+REQUIRED_PKGS = ["curl", "jq", "proot", "python"]
 GLIBC_PKGS = ["glibc-repo", "glibc-runner"]
 
 CONFIG_JSON = {
@@ -111,7 +120,7 @@ CONFIG_JSON = {
     }
 }
 
-DAEMON_SPAWN = r"""#!/data/data/com.termux/files/usr/bin/python3
+DAEMON_SPAWN = r"""#!/usr/bin/env python3
 import os
 import sys
 
@@ -144,9 +153,8 @@ if __name__ == '__main__':
     daemonize(sys.argv[3:], sys.argv[2], sys.argv[1])
 """
 
-MANAGER_SH = r"""#!/data/data/com.termux/files/usr/bin/bash
-BASE_DIR="$HOME/.opencode-proxy"
-SETUP="$BASE_DIR/setup.py"
+MANAGER_SH = r"""#!/usr/bin/env bash
+SETUP="$HOME/.opencode-proxy/setup.py"
 case "$1" in
     start)   python3 "$SETUP" start ;;
     stop)    python3 "$SETUP" stop ;;
@@ -159,8 +167,8 @@ case "$1" in
 esac
 """
 
-OPENCODE_WRAPPER_SH = r"""#!/data/data/com.termux/files/usr/bin/bash
-exec /data/data/com.termux/files/usr/bin/grun "$HOME/.local/bin/opencode-bin" "$@"
+OPENCODE_WRAPPER_SH = """#!/usr/bin/env bash
+exec grun "$HOME/.local/bin/opencode-bin" "$@"
 """
 
 OPENCODE_JSONC_CONTENT = """{
@@ -203,6 +211,13 @@ OPENCODE_JSONC_CONTENT = """{
 """
 
 
+def detect_env():
+    """Return 'termux' if running on Termux, else 'linux'."""
+    if which("pkg") or Path("/data/data/com.termux").exists():
+        return "termux"
+    return "linux"
+
+
 def check_arch():
     if ARCH not in ("aarch64", "arm64"):
         cprint(f"Error: Architecture {ARCH} not supported. Requires aarch64/ARM64.", RED)
@@ -210,20 +225,56 @@ def check_arch():
 
 
 def install_packages():
+    env = detect_env()
     needed = [p for p in REQUIRED_PKGS if not which(p)]
-    if not which("grun"):
-        needed += GLIBC_PKGS
+
+    if env == "termux":
+        if not which("grun"):
+            needed += GLIBC_PKGS
+        # termux-tools is Termux-only, keep it
+        if "termux-tools" not in needed and not which("termux-chroot"):
+            needed.append("termux-tools")
+    else:
+        # On Linux/Ubuntu, skip Termux-only packages (not in apt)
+        needed = [p for p in needed if p not in TERMUX_ONLY]
+        # python may be python3 on some systems
+        if not which("python3") and "python" not in needed:
+            needed.append("python3")
+
     if not needed:
         return
+
+    cprint(f"Environment: {env}", BLUE)
     cprint(f"Installing dependencies: {' '.join(needed)}", BLUE)
-    run(["pkg", "update", "-y"])
-    run(["pkg", "install", "-y"] + needed)
+
+    if env == "termux":
+        run(["pkg", "update", "-y"])
+        run(["pkg", "install", "-y"] + needed)
+    else:
+        run(["apt-get", "update", "-y"])
+        run(["apt-get", "install", "-y"] + needed)
 
 
 def download(url, dest):
+    """Live single-line download progress (no spamming)."""
     cprint(f"Downloading {url}", BLUE)
     with urllib.request.urlopen(url) as resp, open(dest, "wb") as f:
-        shutil.copyfileobj(resp, f)
+        total = int(resp.headers.get("Content-Length", 0))
+        downloaded = 0
+        bar_len = 30
+        while True:
+            chunk = resp.read(8192)
+            if not chunk:
+                break
+            f.write(chunk)
+            downloaded += len(chunk)
+            if total > 0:
+                percent = min(downloaded * 100 / total, 100)
+                filled = int(bar_len * percent / 100)
+                bar = "\u2588" * filled + "\u2591" * (bar_len - filled)
+                kb = downloaded // 1024
+                print(f"\r  {BLUE}[dl]{NC} {bar} {percent:5.1f}% ({kb} KB)", end="", flush=True)
+    print()
 
 
 def extract_named(tar_path, dest_dir, name_suffix):
@@ -260,6 +311,7 @@ def write_manager():
 
 
 def install_opencode_cli():
+    env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     if OPENCODE_BIN.exists():
         return
@@ -269,8 +321,14 @@ def install_opencode_cli():
     extract_named(tmp, LOCAL_BIN, "package/bin/opencode")
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
-    OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
-    os.chmod(OPENCODE_WRAPPER, 0o755)
+
+    # grun wrapper only exists on Termux; on Linux we still drop the binary
+    # but the wrapper will only work where grun is available.
+    if env == "termux":
+        OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
+        os.chmod(OPENCODE_WRAPPER, 0o755)
+    else:
+        cprint("Note: OpenCode CLI via grun requires Termux. Binary saved to ~/.local/bin/opencode-bin", YELLOW)
 
 
 def write_opencode_config():
@@ -323,6 +381,7 @@ def health_ok():
 
 
 def start_daemon():
+    env = detect_env()
     pid = get_pid()
     if pid:
         cprint(f"Already running (PID: {pid})", YELLOW)
@@ -349,7 +408,10 @@ def start_daemon():
     log_fd = open(LOG_FILE, "a")
     os.dup2(log_fd.fileno(), sys.stdout.fileno())
     os.dup2(log_fd.fileno(), sys.stderr.fileno())
-    cmd = ["termux-chroot", str(ENGINE_BIN), "-config", str(CONFIG_FILE)]
+    if env == "termux":
+        cmd = ["termux-chroot", str(ENGINE_BIN), "-config", str(CONFIG_FILE)]
+    else:
+        cmd = [str(ENGINE_BIN), "-config", str(CONFIG_FILE)]
     try:
         os.execv(cmd[0], cmd)
     except Exception as e:

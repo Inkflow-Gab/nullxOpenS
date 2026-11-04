@@ -213,7 +213,11 @@ OPENCODE_JSONC_CONTENT = """{
 
 def detect_env():
     """Return 'termux' if running on Termux, else 'linux'."""
-    if which("pkg") or Path("/data/data/com.termux").exists():
+    # TERMUX_VERSION is set by Termux itself — most reliable indicator
+    if os.environ.get("TERMUX_VERSION"):
+        return "termux"
+    # Check the Termux pkg binary specifically (not just any 'pkg' on PATH)
+    if Path("/data/data/com.termux/files/usr/bin/pkg").exists():
         return "termux"
     return "linux"
 
@@ -231,15 +235,17 @@ def install_packages():
     if env == "termux":
         if not which("grun"):
             needed += GLIBC_PKGS
-        # termux-tools is Termux-only, keep it
         if "termux-tools" not in needed and not which("termux-chroot"):
             needed.append("termux-tools")
     else:
-        # On Linux/Ubuntu, skip Termux-only packages (not in apt)
+        # On Linux/Ubuntu, skip Termux-only packages (not in apt, not needed — native glibc)
         needed = [p for p in needed if p not in TERMUX_ONLY]
         # python may be python3 on some systems
         if not which("python3") and "python" not in needed:
             needed.append("python3")
+
+    # Remove anything already available
+    needed = [p for p in needed if not which(p)]
 
     if not needed:
         return
@@ -249,7 +255,16 @@ def install_packages():
 
     if env == "termux":
         run(["pkg", "update", "-y"])
-        run(["pkg", "install", "-y"] + needed)
+        # Critical packages must succeed; Termux-only ones are best-effort
+        critical = [p for p in needed if p not in TERMUX_ONLY]
+        optional = [p for p in needed if p in TERMUX_ONLY]
+        if critical:
+            run(["pkg", "install", "-y"] + critical)
+        for p in optional:
+            try:
+                run(["pkg", "install", "-y", p])
+            except subprocess.CalledProcessError:
+                cprint(f"Skipping optional package: {p}", YELLOW)
     else:
         run(["apt-get", "update", "-y"])
         run(["apt-get", "install", "-y"] + needed)

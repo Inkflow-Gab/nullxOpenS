@@ -87,6 +87,7 @@ opencode
 | `opencode-proxy doctor` | Run system diagnostics |
 | `opencode-proxy sync` | Re-sync skills from claude-skills repo |
 | `opencode-proxy continue` | Resume previous OpenCode session (`opencode --continue`) |
+| `opencode-proxy fix-dns` | Fix `/etc/resolv.conf` for WARP DNS (1.1.1.1, 8.8.8.8) |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited stop` | Stop proxy + CLI |
@@ -269,7 +270,13 @@ Check that your whole setup is healthy:
 opencode-proxy doctor
 ```
 
-This verifies Python, architecture, packages, binaries, configs, skills, and gateway connectivity — and gives you actionable fix suggestions.
+This verifies Python, architecture, packages, binaries, configs, skills, gateway connectivity, and that OpenCode is routed through the proxy — and gives you actionable fix suggestions.
+
+If the proxy can't connect (DNS/WARP blocked), run:
+
+```bash
+opencode-proxy fix-dns
+```
 
 ---
 
@@ -290,6 +297,43 @@ opencode-proxy continue
 ```
 
 Both are equivalent — `opencode --continue` is the direct form, `opencode-proxy continue` goes through the manager wrapper.
+
+## Troubleshooting 🩺
+
+### Still seeing "Free usage exceeded" / rate-limit errors?
+
+This means OpenCode is hitting OpenCode's servers directly instead of going through the proxy. Fix it:
+
+**Step 1: Make sure the proxy is running**
+```bash
+opencode-proxy start
+opencode-proxy status   # should show gateway online + WARP active
+```
+
+**Step 2: Fix DNS if WARP can't connect**
+```bash
+opencode-proxy fix-dns
+opencode-proxy restart
+```
+
+**Step 3: Confirm OpenCode is routed through the proxy**
+```bash
+opencode-proxy doctor   # check "opencode.jsonc → proxy" shows "routed"
+opencode-proxy config   # baseURL should be http://127.0.0.1:8080/v1
+```
+
+**Step 4: Test through the proxy**
+```bash
+opencode-proxy test deepseek-v4.1-flash-free
+```
+
+If all checks pass, launch OpenCode through the proxy:
+```bash
+opencode-unlimited start
+opencode --continue
+```
+
+Never run `opencode` directly — always go through `opencode-proxy` / `opencode-unlimited` so WARP rotates your egress IP.
 
 ## Credits 🏅
 

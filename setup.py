@@ -679,7 +679,15 @@ def do_doctor():
 
     # Configs
     checks.append(("gateway config", "present" if CONFIG_FILE.exists() else "missing", CONFIG_FILE.exists()))
-    checks.append(("opencode.jsonc", "present" if OPENCODE_JSONC.exists() else "missing", OPENCODE_JSONC.exists()))
+    oc_jsonc_ok = OPENCODE_JSONC.exists()
+    if oc_jsonc_ok:
+        try:
+            cfg = json.loads(OPENCODE_JSONC.read_text())
+            opts = cfg.get("provider", {}).get("opencode-unlimited-proxy", {}).get("options", {})
+            oc_jsonc_ok = opts.get("baseURL", "") == "http://127.0.0.1:8080/v1"
+        except Exception:
+            oc_jsonc_ok = False
+    checks.append(("opencode.jsonc → proxy", "routed" if oc_jsonc_ok else "not routed", oc_jsonc_ok))
 
     # Skills
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -713,6 +721,10 @@ def do_doctor():
         info("Run: python3 setup.py install  (to install OpenCode CLI)")
     if not gw_healthy:
         info("Run: opencode-proxy start  (to start the gateway)")
+        info("   Then: opencode-proxy fix-dns  (if DNS/WARP is blocked)")
+    if not oc_jsonc_ok:
+        info("Run: python3 setup.py install  (re-writes opencode.jsonc to route through proxy)")
+        info("   Or: opencode-proxy config  (to inspect current config)")
     if skill_count == 0:
         info("Run: opencode-proxy skills install  (to download skills)")
 
@@ -784,8 +796,10 @@ case "$1" in
     doctor)  python3 "$SETUP" doctor ;;
     sync)    python3 "$SETUP" sync ;;
     apply-skill) python3 "$SETUP" skills apply-skill "${2:-}" ;;
+    continue) python3 "$SETUP" continue ;;
+    fix-dns) python3 "$SETUP" fix-dns ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns}"; exit 1 ;;
 esac
 """
 
@@ -895,6 +909,33 @@ def fix_dns():
             info("Fixed /etc/resolv.conf for WARP DNS (1.1.1.1, 8.8.8.8)")
         except Exception as e:
             warn(f"Could not fix /etc/resolv.conf: {e}")
+
+
+def do_fix_dns():
+    """Force-fix /etc/resolv.conf for WARP DNS on any environment."""
+    header("Fix DNS for WARP")
+    resolv = Path("/etc/resolv.conf")
+    if not resolv.exists():
+        warn("/etc/resolv.conf not found — nothing to fix")
+        return
+    try:
+        content = resolv.read_text()
+    except Exception as e:
+        error(f"Cannot read /etc/resolv.conf: {e}")
+        return
+    backup = Path("/etc/resolv.conf.opencode-unlimited.bak")
+    if not backup.exists():
+        try:
+            shutil.copy2(resolv, backup)
+            info(f"Backed up original to {backup}")
+        except Exception:
+            pass
+    try:
+        resolv.write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+        success("/etc/resolv.conf set to 1.1.1.1, 8.8.8.8")
+        info("Run 'opencode-proxy restart' to apply.")
+    except Exception as e:
+        error(f"Could not write /etc/resolv.conf: {e}")
 
 
 def check_arch():
@@ -1175,10 +1216,29 @@ exec "{OPENCODE_BIN}" "$@"
     success("OpenCode CLI installed.")
 
 
-def write_opencode_config():
+def write_opencode_config(force=False):
+    """Write OpenCode config pointing to the local proxy.
+
+    Always updates model + baseURL so OpenCode routes through opencode2api
+    (with WARP rotation) instead of hitting OpenCode's free-tier rate limit.
+    """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    if not OPENCODE_JSONC.exists():
+    if OPENCODE_JSONC.exists() and not force:
+        try:
+            current = json.loads(OPENCODE_JSONC.read_text())
+            current["model"] = "opencode-unlimited-proxy/deepseek-v4.1-flash-free"
+            current.setdefault("provider", {}).setdefault("opencode-unlimited-proxy", {})["options"] = {
+                "baseURL": "http://127.0.0.1:8080/v1",
+                "apiKey": "local-test-key",
+            }
+            OPENCODE_JSONC.write_text(json.dumps(current, indent=2))
+            info("Updated existing opencode.jsonc to route through local proxy.")
+        except Exception:
+            OPENCODE_JSONC.write_text(OPENCODE_JSONC_CONTENT)
+            info("Wrote fresh opencode.jsonc routing through local proxy.")
+    else:
         OPENCODE_JSONC.write_text(OPENCODE_JSONC_CONTENT)
+        success("Wrote opencode.jsonc routing through local proxy.")
 
 
 def ensure_path():
@@ -1320,7 +1380,12 @@ def status_daemon():
 
 def test_model(model):
     header(f"Testing Model: {model}")
-    info("Sending test prompt...")
+    if not health_ok():
+        error(f"Proxy not reachable at {API_URL}/healthz — is it running?")
+        info("Start it: opencode-proxy start")
+        info("Fix DNS if needed: opencode-proxy fix-dns")
+        return
+    info("Sending test prompt through proxy...")
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": "Say: Test successful."}],
@@ -1510,7 +1575,7 @@ def do_install():
     write_unlimited_launcher()
     write_skills()
     install_opencode_cli()
-    write_opencode_config()
+    write_opencode_config(force=True)
     ensure_path()
     header("Setup Complete!")
     success("Run 'opencode-unlimited' to start gateway + CLI together.")
@@ -1521,6 +1586,7 @@ def do_install():
     info("Model:   'opencode-proxy model <name>'")
     info("Config:  'opencode-proxy config'")
     info("Doctor:  'opencode-proxy doctor'")
+    info("Fix DNS: 'opencode-proxy fix-dns'  (if WARP/proxy can't connect)")
 
 
 def main():
@@ -1531,7 +1597,7 @@ def main():
                              "backup", "restore", "watchdog", "version",
                              "validate", "dry-run", "skills", "models",
                              "model", "config", "doctor", "sync",
-                             "apply-skill", "continue"],
+                             "apply-skill", "continue", "fix-dns"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -1585,6 +1651,8 @@ def main():
         do_skills("apply-skill", args.skill_name)
     elif args.action == "continue":
         do_continue()
+    elif args.action == "fix-dns":
+        do_fix_dns()
 
 
 if __name__ == "__main__":

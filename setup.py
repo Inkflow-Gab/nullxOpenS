@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""OpenCode Termux Unlimited — all-in-one setup & controller.
+"""OpenCode UNLIMITED — all-in-one setup & controller.
 
 Works on native Termux (pkg) and inside proot-distro Ubuntu (apt).
-Detects the environment automatically and skips Termux-only packages when
-not running on Termux.
+Auto-detects environment and skips Termux-only packages when not on Termux.
+Built and maintained by null.
 """
 
 import os
@@ -15,18 +15,43 @@ import subprocess
 import urllib.request
 import tarfile
 import argparse
+import socket
+import tempfile
 from pathlib import Path
 
+# ── Colors ──
 RED = "\033[0;31m"
 GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
 YELLOW = "\033[1;33m"
 CYAN = "\033[0;36m"
+MAGENTA = "\033[0;35m"
+BOLD = "\033[1m"
 NC = "\033[0m"
 
 
 def cprint(msg, color=NC):
     print(f"{color}{msg}{NC}")
+
+
+def header(msg):
+    cprint(f"\n{BOLD}{CYAN}=== {msg} ==={NC}", CYAN)
+
+
+def success(msg):
+    cprint(f"{BOLD}{GREEN}[✓]{NC} {msg}", GREEN)
+
+
+def info(msg):
+    cprint(f"{BLUE}[→]{NC} {msg}", BLUE)
+
+
+def warn(msg):
+    cprint(f"{YELLOW}[!]{NC} {msg}", YELLOW)
+
+
+def error(msg):
+    cprint(f"{RED}[✗]{NC} {msg}", RED)
 
 
 def which(cmd):
@@ -37,6 +62,7 @@ def run(cmd, check=True, capture=False):
     return subprocess.run(cmd, check=check, capture_output=capture, text=True)
 
 
+# ── Paths ──
 HOME = Path.home()
 BASE_DIR = HOME / ".opencode-proxy"
 BIN_DIR = BASE_DIR / "bin"
@@ -51,6 +77,7 @@ ENGINE_BIN = BIN_DIR / "opencode2api"
 OPENCODE_BIN = LOCAL_BIN / "opencode-bin"
 OPENCODE_WRAPPER = LOCAL_BIN / "opencode"
 OPENCODE_JSONC = CONFIG_DIR / "opencode.jsonc"
+BACKUP_DIR = BASE_DIR / "backups"
 BASHRC = HOME / ".bashrc"
 
 ENGINE_VER = "v1.4.6"
@@ -58,13 +85,12 @@ ENGINE_URL = (
     "https://github.com/jasonxu114514/opencode2api/releases/download/"
     f"{ENGINE_VER}/opencode2api_{ENGINE_VER}_linux_arm64.tar.gz"
 )
+SETUP_URL = "https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py"
 API_URL = "http://127.0.0.1:8080"
 API_KEY = "local-test-key"
 ARCH = os.uname().machine
 
-# Termux-only packages (not available in Ubuntu/Debian apt)
 TERMUX_ONLY = {"termux-tools", "glibc-repo", "glibc-runner"}
-
 REQUIRED_PKGS = ["curl", "jq", "proot", "python"]
 GLIBC_PKGS = ["glibc-repo", "glibc-runner"]
 
@@ -162,8 +188,13 @@ case "$1" in
     status)  python3 "$SETUP" status ;;
     test)    python3 "$SETUP" test "${2:-deepseek-v4.1-flash-free}" ;;
     logs)    python3 "$SETUP" logs ;;
+    update)  python3 "$SETUP" update ;;
+    uninstall) python3 "$SETUP" uninstall ;;
+    backup)  python3 "$SETUP" backup ;;
+    restore) python3 "$SETUP" restore "${2:-}" ;;
+    watchdog) python3 "$SETUP" watchdog ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|logs}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|logs|update|uninstall|backup|restore [file]|watchdog}"; exit 1 ;;
 esac
 """
 
@@ -211,15 +242,14 @@ OPENCODE_JSONC_CONTENT = """{
 """
 
 
+# ── Environment detection ──
 def detect_env():
     """Return 'termux' or 'linux'.
 
-    Inside proot-distro ubuntu, pkg is mounted from Termux and pkg --version
-    succeeds, but installing Termux-only packages there fails. Check apt-get
-    first (multiple common paths, since shutil.which may not find it in the
-    Python subprocess PATH): if apt-get exists, we're on Ubuntu/proot-distro
-    (native glibc, apt repos). Only use pkg if apt-get isn't available
-    (real Termux).
+    Inside proot-distro ubuntu, pkg is mounted from Termux but installing
+    Termux-only packages there fails. Check apt-get first: if it exists,
+    we're on Ubuntu/proot-distro (native glibc, apt repos). Only use pkg
+    if apt-get isn't available (real Termux).
     """
     for apt_path in ("/usr/bin/apt-get", "/bin/apt-get", "apt-get"):
         if os.path.exists(apt_path) or which(apt_path):
@@ -233,13 +263,15 @@ def detect_env():
     return "linux"
 
 
+# ── Arch check ──
 def check_arch():
     if ARCH not in ("aarch64", "arm64"):
-        cprint(f"Error: Architecture {ARCH} not supported. Requires aarch64/ARM64.", RED)
+        error(f"Architecture {ARCH} not supported. Requires aarch64/ARM64.")
         sys.exit(1)
 
 
-def install_packages():
+# ── Package install ──
+def install_packages(dry_run=False):
     env = detect_env()
     needed = [p for p in REQUIRED_PKGS if not which(p)]
 
@@ -249,58 +281,62 @@ def install_packages():
         if "termux-tools" not in needed and not which("termux-chroot"):
             needed.append("termux-tools")
     else:
-        # On Linux/Ubuntu, skip Termux-only packages (not in apt, not needed — native glibc)
         needed = [p for p in needed if p not in TERMUX_ONLY]
-        # python may be python3 on some systems
         if not which("python3") and "python" not in needed:
             needed.append("python3")
 
-    # Remove anything already available
     needed = [p for p in needed if not which(p)]
 
     if not needed:
+        info("All dependencies already installed.")
         return
 
-    cprint(f"Environment: {env}", BLUE)
-    cprint(f"Installing dependencies: {' '.join(needed)}", BLUE)
+    header("Installing Dependencies")
+    info(f"Environment: {env}")
+    info(f"Packages: {' '.join(needed)}")
+
+    if dry_run:
+        info("[dry-run] Would install packages: " + " ".join(needed))
+        return
 
     if env == "termux":
         try:
             run(["pkg", "update", "-y"])
         except subprocess.CalledProcessError:
-            cprint("pkg update failed — falling back to apt-get", YELLOW)
+            warn("pkg update failed — falling back to apt-get")
             env = "linux"
 
     if env == "termux":
-        # Critical packages must succeed; Termux-only ones are best-effort
         critical = [p for p in needed if p not in TERMUX_ONLY]
         optional = [p for p in needed if p in TERMUX_ONLY]
         if critical:
             try:
                 run(["pkg", "install", "-y"] + critical)
             except subprocess.CalledProcessError as e:
-                cprint(f"Critical pkg install failed: {e}", RED)
+                error(f"Critical pkg install failed: {e}")
                 env = "linux"
         for p in optional:
             try:
                 run(["pkg", "install", "-y", p])
             except subprocess.CalledProcessError:
-                cprint(f"Skipping optional package: {p}", YELLOW)
-
+                warn(f"Skipping optional package: {p}")
     if env == "linux":
         try:
             run(["apt-get", "update", "-y"])
         except subprocess.CalledProcessError:
-            cprint("apt-get update failed — continuing anyway", YELLOW)
+            warn("apt-get update failed — continuing anyway")
         try:
             run(["apt-get", "install", "-y"] + needed)
         except subprocess.CalledProcessError as e:
-            cprint(f"Package install had issues: {e} — continuing anyway", YELLOW)
+            error(f"Package install had issues: {e} — continuing anyway")
+
+    success("Dependencies installed.")
 
 
+# ── Download with live progress ──
 def download(url, dest):
     """Live single-line download progress (no spamming)."""
-    cprint(f"Downloading {url}", BLUE)
+    info(f"Downloading {url}")
     with urllib.request.urlopen(url) as resp, open(dest, "wb") as f:
         total = int(resp.headers.get("Content-Length", 0))
         downloaded = 0
@@ -318,60 +354,75 @@ def download(url, dest):
                 kb = downloaded // 1024
                 print(f"\r  {BLUE}[dl]{NC} {bar} {percent:5.1f}% ({kb} KB)", end="", flush=True)
     print()
+    success("Download complete.")
 
 
+# ── Tarball extraction ──
 def extract_tar(tar_path, dest_dir):
-    """Safely extract a tarball to dest_dir (handles Python 3.12+ filters)."""
     with tarfile.open(tar_path, "r:gz") as tar:
         try:
             tar.extractall(dest_dir, filter="data")
         except TypeError:
             tar.extractall(dest_dir)
 
+
 def find_binary(root_dir, name):
-    """Find a file by name anywhere under root_dir."""
     for root, _dirs, files in os.walk(root_dir):
         for f in files:
             if f == name:
                 return Path(root) / f
     return None
 
-def install_engine():
+
+# ── Engine install ──
+def install_engine(dry_run=False):
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     if ENGINE_BIN.exists():
-        cprint("opencode2api already installed — skipping engine download", BLUE)
+        info("opencode2api already installed — skipping engine download.")
         return
+
+    header("Installing opencode2api Engine")
+    info(f"Version: {ENGINE_VER}")
+
+    if dry_run:
+        info(f"[dry-run] Would download {ENGINE_URL}")
+        return
+
     tmp = BASE_DIR / "opencode2api.tar.gz"
     download(ENGINE_URL, tmp)
-    import tempfile
     with tempfile.TemporaryDirectory() as td:
         extract_tar(tmp, td)
         binary = find_binary(td, "opencode2api")
         if not binary:
-            cprint("Failed to find opencode2api binary in tarball", RED)
+            error("Failed to find opencode2api binary in tarball")
             tmp.unlink(missing_ok=True)
             return
         shutil.copy2(binary, ENGINE_BIN)
     os.chmod(ENGINE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
+    success("Engine installed.")
 
 
+# ── Daemon spawner ──
 def write_daemon_spawner():
     DAEMON_FILE.write_text(DAEMON_SPAWN)
     os.chmod(DAEMON_FILE, 0o755)
 
 
+# ── Config ──
 def write_config():
     CONFIG_FILE.write_text(json.dumps(CONFIG_JSON, indent=2))
 
 
+# ── Manager CLI ──
 def write_manager():
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     MANAGER_FILE.write_text(MANAGER_SH)
     os.chmod(MANAGER_FILE, 0o755)
 
 
-def install_opencode_cli():
+# ── OpenCode CLI ──
+def install_opencode_cli(dry_run=False):
     env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
 
@@ -385,30 +436,40 @@ exec "{OPENCODE_BIN}" "$@"
     os.chmod(OPENCODE_WRAPPER, 0o755)
 
     if OPENCODE_BIN.exists():
-        cprint("OpenCode CLI already installed — skipping download", BLUE)
+        info("OpenCode CLI already installed — skipping download.")
         return
+
+    header("Installing OpenCode CLI")
+    info("Version: 1.19.5")
+
+    if dry_run:
+        info("[dry-run] Would download OpenCode CLI tarball")
+        return
+
     url = "https://registry.npmjs.org/opencode-linux-arm64/-/opencode-linux-arm64-1.19.5.tgz"
     tmp = LOCAL_BIN / "opencode-cli.tgz"
     download(url, tmp)
-    import tempfile
     with tempfile.TemporaryDirectory() as td:
         extract_tar(tmp, td)
         binary = find_binary(td, "opencode")
         if not binary:
-            cprint("Failed to find opencode binary in tarball", RED)
+            error("Failed to find opencode binary in tarball")
             tmp.unlink(missing_ok=True)
             return
         shutil.copy2(binary, OPENCODE_BIN)
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
+    success("OpenCode CLI installed.")
 
 
+# ── OpenCode config ──
 def write_opencode_config():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     if not OPENCODE_JSONC.exists():
         OPENCODE_JSONC.write_text(OPENCODE_JSONC_CONTENT)
 
 
+# ── PATH ──
 def ensure_path():
     path_str = str(LOCAL_BIN)
     if path_str not in os.environ.get("PATH", ""):
@@ -423,6 +484,7 @@ def ensure_path():
         BASHRC.write_text(line + "\n")
 
 
+# ── PID / health ──
 def get_pid():
     if PID_FILE.exists():
         pid = PID_FILE.read_text().strip()
@@ -452,24 +514,31 @@ def health_ok():
         return False
 
 
-def start_daemon():
+# ── Daemon control ──
+def start_daemon(dry_run=False):
     env = detect_env()
     pid = get_pid()
     if pid:
-        cprint(f"Already running (PID: {pid})", YELLOW)
+        warn(f"Already running (PID: {pid})")
         return
-    cprint("Starting OpenCode Proxy daemon...", BLUE)
+
+    header("Starting Proxy Daemon")
+    if dry_run:
+        info("[dry-run] Would start opencode2api daemon")
+        return
+
+    info("Starting OpenCode Proxy daemon...")
     pid = os.fork()
     if pid > 0:
         for _ in range(15):
             if health_ok():
-                cprint("Proxy online!", GREEN)
-                cprint(f"    API Endpoint: {API_URL}/v1", BLUE)
-                cprint(f"    Dashboard   : http://127.0.0.1:8081", BLUE)
-                cprint(f"    API Key     : {API_KEY}", BLUE)
+                success("Proxy online!")
+                info(f"API Endpoint: {API_URL}/v1")
+                info(f"Dashboard   : http://127.0.0.1:8081")
+                info(f"API Key     : {API_KEY}")
                 return
             time.sleep(1)
-        cprint("Proxy failed to start. Check logs with: opencode-proxy logs", RED)
+        error("Proxy failed to start. Check logs with: opencode-proxy logs")
         sys.exit(1)
     os.setsid()
     pid2 = os.fork()
@@ -491,9 +560,13 @@ def start_daemon():
         os._exit(1)
 
 
-def stop_daemon():
+def stop_daemon(dry_run=False):
     pid = get_pid()
     if pid:
+        header("Stopping Proxy Daemon")
+        if dry_run:
+            info(f"[dry-run] Would stop PID {pid}")
+            return
         try:
             os.kill(pid, 15)
         except ProcessLookupError:
@@ -503,37 +576,42 @@ def stop_daemon():
         except subprocess.CalledProcessError:
             pass
         PID_FILE.unlink(missing_ok=True)
-        cprint("Proxy stopped.", GREEN)
+        success("Proxy stopped.")
     else:
-        cprint("Proxy is not running.", YELLOW)
+        info("Proxy is not running.")
 
 
-def restart_daemon():
-    stop_daemon()
+def restart_daemon(dry_run=False):
+    stop_daemon(dry_run=True)
     time.sleep(1)
-    start_daemon()
+    start_daemon(dry_run=dry_run)
 
 
+# ── Status ──
 def status_daemon():
     pid = get_pid()
     if pid:
-        cprint(f"OpenCode Proxy: RUNNING (PID: {pid})", GREEN)
+        header("Proxy Status")
+        success(f"OpenCode Proxy: RUNNING (PID: {pid})")
         try:
             data = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=3).read().decode())
             warp = data.get("warp", {})
-            cprint(f"    WARP Status : {warp.get('status', '?')} (active: {warp.get('active', '?')}, standby: {warp.get('standby', '?')})", BLUE)
+            info(f"WARP Status : {warp.get('status', '?')} (active: {warp.get('active', '?')}, standby: {warp.get('standby', '?')})")
             models = data.get("models", {})
-            cprint(f"    Free Models : {models.get('exposed', '?')} active ({models.get('total', '?')} total upstream)", BLUE)
+            info(f"Free Models : {models.get('exposed', '?')} active ({models.get('total', '?')} total upstream)")
         except Exception:
-            cprint("    API Check   : initializing or unreachable", YELLOW)
-        cprint(f"    API Base    : {API_URL}/v1", BLUE)
-        cprint(f"    Dashboard   : http://127.0.0.1:8081", BLUE)
+            warn("API Check: initializing or unreachable")
+        info(f"API Base    : {API_URL}/v1")
+        info(f"Dashboard   : http://127.0.0.1:8081")
     else:
-        cprint("OpenCode Proxy: STOPPED", RED)
+        header("Proxy Status")
+        error("OpenCode Proxy: STOPPED")
 
 
+# ── Test ──
 def test_model(model):
-    cprint(f"Sending test prompt to '{model}'...", BLUE)
+    header(f"Testing Model: {model}")
+    info("Sending test prompt...")
     payload = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": "Say: Test successful."}],
@@ -550,7 +628,8 @@ def test_model(model):
                 if line.startswith("data: "):
                     data = line[6:]
                     if data == "[DONE]":
-                        cprint("\nStream completed.", GREEN)
+                        print()
+                        success("Stream completed.")
                         break
                     try:
                         obj = json.loads(data)
@@ -561,29 +640,169 @@ def test_model(model):
                         pass
         print()
     except Exception as e:
-        cprint(f"Test failed: {e}", RED)
+        error(f"Test failed: {e}")
 
 
+# ── Logs ──
 def show_logs():
+    header("Proxy Logs")
     if LOG_FILE.exists():
-        print(LOG_FILE.read_text(errors="replace")[-3000:])
+        print(LOG_FILE.read_text(errors="replace")[-5000:])
     else:
-        cprint("No log file found.", YELLOW)
+        warn("No log file found.")
 
 
+# ── Update ──
+def do_update():
+    header("Updating setup.py")
+    try:
+        tmp = BASE_DIR / "setup.py.new"
+        urllib.request.urlretrieve(SETUP_URL, tmp)
+        shutil.copy2(tmp, BASE_DIR / "setup.py")
+        shutil.copy2(tmp, Path(__file__).resolve())
+        tmp.unlink(missing_ok=True)
+        success("setup.py updated. Re-run the installer to apply changes.")
+    except Exception as e:
+        error(f"Update failed: {e}")
+
+
+# ── Uninstall ──
+def do_uninstall():
+    header("Uninstalling OpenCode UNLIMITED")
+    stop_daemon()
+    for p in [PID_FILE, LOG_FILE, CONFIG_FILE, DAEMON_FILE, ENGINE_BIN,
+              OPENCODE_BIN, OPENCODE_WRAPPER, MANAGER_FILE, OPENCODE_JSONC]:
+        try:
+            if p.exists():
+                p.unlink()
+                info(f"Removed {p}")
+        except Exception as e:
+            warn(f"Could not remove {p}: {e}")
+    for d in [BIN_DIR, BACKUP_DIR]:
+        try:
+            if d.exists():
+                shutil.rmtree(d)
+                info(f"Removed {d}")
+        except Exception as e:
+            warn(f"Could not remove {d}: {e}")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    success("Uninstall complete.")
+
+
+# ── Backup ──
+def do_backup():
+    header("Backup")
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    archive = BACKUP_DIR / f"opencode-backup-{stamp}.tar.gz"
+    items = [CONFIG_FILE, OPENCODE_JSONC, BASE_DIR / "setup.py"]
+    with tarfile.open(archive, "w:gz") as tar:
+        for item in items:
+            if item.exists():
+                tar.add(item, arcname=item.name)
+    success(f"Backup saved to {archive}")
+
+
+# ── Restore ──
+def do_restore(archive_path=""):
+    header("Restore")
+    if not archive_path:
+        # Find latest backup
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        backups = sorted(BACKUP_DIR.glob("*.tar.gz"))
+        if not backups:
+            error("No backup files found in ~/.opencode-proxy/backups/")
+            return
+        archive_path = str(backups[-1])
+        info(f"Using latest backup: {archive_path}")
+
+    archive = Path(archive_path)
+    if not archive.exists():
+        error(f"Backup file not found: {archive}")
+        return
+
+    with tarfile.open(archive, "r:gz") as tar:
+        tar.extractall(BASE_DIR)
+    success(f"Restored from {archive}")
+    info("Run 'opencode-proxy restart' to apply.")
+
+
+# ── Watchdog ──
+def do_watchdog():
+    header("Watchdog")
+    info("Monitoring proxy... (Ctrl+C to stop)")
+    try:
+        while True:
+            if not health_ok():
+                warn("Proxy appears down — attempting restart...")
+                stop_daemon(dry_run=True)
+                time.sleep(1)
+                start_daemon(dry_run=True)
+            time.sleep(30)
+    except KeyboardInterrupt:
+        info("Watchdog stopped.")
+
+
+# ── Version check ──
+def do_version():
+    header("Version Info")
+    info(f"setup.py: OpenCode UNLIMITED")
+    info(f"Engine  : opencode2api {ENGINE_VER}")
+    info(f"CLI     : OpenCode CLI 1.19.5")
+    info(f"Arch    : {ARCH}")
+    info(f"Env     : {detect_env()}")
+
+
+# ── Config validation ──
+def do_validate():
+    header("Config Validation")
+    ok = True
+    if CONFIG_FILE.exists():
+        try:
+            json.loads(CONFIG_FILE.read_text())
+            success(f"config.json: valid")
+        except json.JSONDecodeError:
+            error(f"config.json: invalid JSON")
+            ok = False
+    else:
+        warn(f"config.json: missing")
+        ok = False
+    if OPENCODE_JSONC.exists():
+        success(f"opencode.jsonc: exists")
+    else:
+        warn(f"opencode.jsonc: missing")
+    if ENGINE_BIN.exists():
+        success(f"opencode2api binary: present")
+    else:
+        warn(f"opencode2api binary: missing")
+    if OPENCODE_BIN.exists():
+        success(f"OpenCode CLI binary: present")
+    else:
+        warn(f"OpenCode CLI binary: missing")
+    return ok
+
+
+# ── Dry-run install ──
+def do_install_dry_run():
+    header("Dry-Run Install")
+    check_arch()
+    detect_env()
+    install_packages(dry_run=True)
+    install_engine(dry_run=True)
+    install_opencode_cli(dry_run=True)
+    info("[dry-run] Would write config, manager, wrapper, PATH")
+    success("Dry-run complete — nothing was changed.")
+
+
+# ── Main install ──
 def do_install():
     check_arch()
-    # Ensure BASE_DIR exists and setup.py is there so opencode-proxy
-    # can always find it (even on re-runs where install_opencode_cli skips early).
-    # Download from GitHub raw URL since __file__ is <stdin> when piped.
+    header("OpenCode UNLIMITED Setup")
     BASE_DIR.mkdir(parents=True, exist_ok=True)
     setup_py_dest = BASE_DIR / "setup.py"
     if not setup_py_dest.exists():
         try:
-            urllib.request.urlretrieve(
-                "https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py",
-                setup_py_dest,
-            )
+            urllib.request.urlretrieve(SETUP_URL, setup_py_dest)
         except Exception:
             pass
     install_packages()
@@ -594,17 +813,22 @@ def do_install():
     install_opencode_cli()
     write_opencode_config()
     ensure_path()
-    cprint("Setup complete!", GREEN)
-    cprint("Run 'opencode' to start the interactive TUI.", BLUE)
-    cprint("Manage gateway with 'opencode-proxy status' or 'opencode-proxy stop'.", BLUE)
+    header("Setup Complete!")
+    success("Run 'opencode' to start the interactive TUI.")
+    info("Manage gateway with 'opencode-proxy {start|stop|restart|status|test|logs}'.")
 
 
+# ── CLI ──
 def main():
-    ap = argparse.ArgumentParser(description="OpenCode Termux Unlimited all-in-one setup")
+    ap = argparse.ArgumentParser(description="OpenCode UNLIMITED all-in-one setup")
     ap.add_argument("action", nargs="?",
-                    choices=["install", "start", "stop", "restart", "status", "test", "logs"],
+                    choices=["install", "start", "stop", "restart", "status",
+                             "test", "logs", "update", "uninstall", "backup",
+                             "restore", "watchdog", "version", "validate",
+                             "dry-run"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
+    ap.add_argument("archive", nargs="?", default="")
     args = ap.parse_args()
     if args.action == "install":
         do_install()
@@ -620,6 +844,22 @@ def main():
         test_model(args.model)
     elif args.action == "logs":
         show_logs()
+    elif args.action == "update":
+        do_update()
+    elif args.action == "uninstall":
+        do_uninstall()
+    elif args.action == "backup":
+        do_backup()
+    elif args.action == "restore":
+        do_restore(args.archive)
+    elif args.action == "watchdog":
+        do_watchdog()
+    elif args.action == "version":
+        do_version()
+    elif args.action == "validate":
+        do_validate()
+    elif args.action == "dry-run":
+        do_install_dry_run()
 
 
 if __name__ == "__main__":

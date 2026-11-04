@@ -212,12 +212,15 @@ OPENCODE_JSONC_CONTENT = """{
 
 
 def detect_env():
-    """Return 'termux' only if pkg actually works; else 'linux'.
+    """Return 'termux' or 'linux'.
 
-    Inside proot-distro ubuntu, TERMUX_VERSION and the Termux pkg path
-    are inherited from the parent Termux, but pkg doesn't really work
-    for installing Termux packages there. We verify by trying pkg itself.
+    Inside proot-distro ubuntu, pkg is mounted from Termux and pkg --version
+    succeeds, but installing Termux-only packages there fails. Check apt-get
+    first: if it exists, we're on Ubuntu/proot-distro (native glibc, apt repos).
+    Only use pkg if apt-get isn't available (real Termux).
     """
+    if which("apt-get"):
+        return "linux"
     if which("pkg"):
         try:
             run(["pkg", "--version"], capture=True, check=True)
@@ -573,6 +576,13 @@ def show_logs():
 
 def do_install():
     check_arch()
+    # Ensure BASE_DIR exists and setup.py is copied there so opencode-proxy
+    # can always find it (even on re-runs where install_opencode_cli skips early).
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        shutil.copy2(Path(__file__).resolve(), BASE_DIR / "setup.py")
+    except Exception:
+        pass
     install_packages()
     install_engine()
     write_daemon_spawner()

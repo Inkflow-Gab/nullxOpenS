@@ -1,30 +1,21 @@
-# OpenCode Termux Unlimited
+# OpenCode UNLIMITED
 
-```
-.__   __.   ______   .__   __.  __  .__   __.      ___      .______       _______  __    __  
-|  \ |  |  /  __  \  |  \ |  | |  | |  \ |  |     /   \     |   _  \     |   ____||  |  |  | 
-|   \|  | |  |  |  | |   \|  | |  | |   \|  |    /  ^  \    |  |_)  |    |  |__   |  |  |  | 
-|  . `  | |  |  |  | |  . `  | |  | |  . `  |   /  /_\  \   |   ___/     |   __|  |  |  |  | 
-|  |\   | |  `--'  | |  |\   | |  | |  |\   |  /  _____  \  |  |         |  |____ |  `--'  | 
-|__| \__|  \______/  |__| \__| |__| |__| \__| /__/     \__\ | _|         |_______| \______/ 
-```
+OpenCode Unlimited on Android (Termux) — rotating Cloudflare WARP egress pool for unlimited free OpenCode models. No root, no Docker, no external servers.
 
 <p align="center">
-  <a href="#"><img src="https://img.shields.io/badge/platform-Android%20%7C%20Termux%20ARM64-green?style=for-the-badge" alt="platform"></a>
-  <a href="#"><img src="https://img.shields.io/badge/engine-opencode2api%20v1.4.6-blue?style=for-the-badge" alt="engine"></a>
-  <a href="#"><img src="https://img.shields.io/badge/opencode-v1.19.5-purple?style=for-the-badge" alt="opencode"></a>
-  <a href="#"><img src="https://img.shields.io/badge/license-MIT-red?style=for-the-badge" alt="license"></a>
-</p>
-
-<p align="center">
-  <b>Turnkey setup for OpenCode CLI on Android (Termux)</b> — rotating Cloudflare WARP egress pool, no root, no containers, no external servers.
+  <img src="https://img.shields.io/badge/platform-Android%20%7C%20Termux%20ARM64-green?style=for-the-badge" alt="platform">
+  <img src="https://img.shields.io/badge/engine-opencode2api%20v1.4.6-blue?style=for-the-badge" alt="engine">
+  <img src="https://img.shields.io/badge/opencode-v1.19.5-purple?style=for-the-badge" alt="opencode">
+  <img src="https://img.shields.io/badge/license-MIT-red?style=for-the-badge" alt="license">
 </p>
 
 ---
 
 ## About
 
-A minimal, all-in-one Python setup that installs and manages the `opencode2api` gateway plus the OpenCode CLI. Works on native Termux **and** inside `proot-distro login ubuntu` — it auto-detects `pkg` vs `apt` and skips Termux-only packages when not on Termux.
+OpenCode UNLIMITED is an all-in-one Python setup that installs and manages the `opencode2api` gateway plus the OpenCode CLI. It rotates through Cloudflare WARP IPv6 exits to eliminate per-IP rate limits on the anonymous free tier — giving you unlimited access to OpenCode's free models.
+
+Works on native Termux **and** inside `proot-distro login ubuntu` — it auto-detects `pkg` vs `apt` and skips Termux-only packages when not on Termux.
 
 Built and maintained by **null**.
 
@@ -45,13 +36,7 @@ Built and maintained by **null**.
 
 ## Quick Start
 
-**Inside Termux:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
-```
-
-**Inside `proot-distro login ubuntu`:**
+One command (works on Termux and proot-distro Ubuntu):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
@@ -68,6 +53,7 @@ python3 setup.py install
 Once installed:
 
 ```bash
+opencode-proxy start
 opencode-proxy status
 opencode
 ```

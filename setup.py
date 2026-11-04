@@ -1111,7 +1111,11 @@ case "$1" in
     start)
         "$PROXY" start
         if wait_for_proxy; then
-            exec "$CLI"
+            if [ "$2" = "--continue" ]; then
+                exec "$CLI" --continue
+            else
+                exec "$CLI"
+            fi
         else
             echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
             exit 1

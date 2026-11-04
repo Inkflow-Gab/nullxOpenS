@@ -56,9 +56,10 @@ python3 setup.py install
 Once installed:
 
 ```bash
-opencode-unlimited start    # starts proxy + launches CLI together
-opencode-unlimited status   # check both proxy and CLI
-opencode-unlimited stop     # stop everything
+opencode-unlimited start           # starts proxy + launches CLI together
+opencode-unlimited start --continue # starts proxy + resumes previous session
+opencode-unlimited status          # check both proxy and CLI
+opencode-unlimited stop            # stop everything
 ```
 
 Or use them separately:
@@ -90,6 +91,7 @@ opencode
 | `opencode-proxy fix-dns` | Fix `/etc/resolv.conf` for WARP DNS (1.1.1.1, 8.8.8.8) |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
+| `opencode-unlimited start --continue` | Start proxy + resume previous OpenCode session |
 | `opencode-unlimited stop` | Stop proxy + CLI |
 | `opencode-unlimited restart` | Restart proxy + CLI |
 | `opencode-unlimited status` | Check both proxy and CLI |

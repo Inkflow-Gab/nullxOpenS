@@ -79,6 +79,7 @@ OPENCODE_WRAPPER = LOCAL_BIN / "opencode"
 OPENCODE_UNLIMITED = LOCAL_BIN / "opencode-unlimited"
 OPENCODE_JSONC = CONFIG_DIR / "opencode.jsonc"
 BACKUP_DIR = BASE_DIR / "backups"
+SKILLS_DIR = BASE_DIR / "skills"
 BASHRC = HOME / ".bashrc"
 
 ENGINE_VER = "v1.4.6"
@@ -147,6 +148,60 @@ CONFIG_JSON = {
     }
 }
 
+# ── Built-in Skills ──
+BUILTIN_SKILLS = [
+    {
+        "name": "web-design",
+        "category": "design",
+        "description": "Expert web design — UI/UX, color theory, typography, responsive layouts",
+        "system_prompt": "You are an expert web designer. You specialize in modern UI/UX design, color theory, typography, responsive layouts, and accessibility. You create clean, beautiful, user-centered web interfaces using HTML/CSS/JS and modern frameworks like Tailwind, React, Vue, or Svelte. Always prioritize visual hierarchy, whitespace, mobile-first design, and WCAG accessibility.",
+    },
+    {
+        "name": "frontend-dev",
+        "category": "development",
+        "description": "Frontend development — React, Vue, Angular, Svelte, TypeScript, modern JS",
+        "system_prompt": "You are an expert frontend developer. You build modern web applications using React, Vue, Angular, Svelte, or plain HTML/CSS/JS with TypeScript. You follow best practices for component architecture, state management, hooks, performance optimization, and accessible markup. You write clean, maintainable, production-ready code.",
+    },
+    {
+        "name": "backend-dev",
+        "category": "development",
+        "description": "Backend development — Node.js, Python, Go, databases, APIs, authentication",
+        "system_prompt": "You are an expert backend developer. You design and build REST APIs, GraphQL, database schemas (SQL & NoSQL), authentication/authorization, caching, and server architecture. You work with Node.js, Python, Go, PostgreSQL, MongoDB, Redis, and cloud platforms. You prioritize security, scalability, and performance.",
+    },
+    {
+        "name": "fullstack-dev",
+        "category": "development",
+        "description": "Full-stack development — end-to-end web applications, deployment, DevOps",
+        "system_prompt": "You are an expert full-stack developer. You build complete web applications from frontend to backend, including deployment, CI/CD, Docker, and cloud infrastructure. You connect frontend UIs with backend APIs, manage databases, handle auth, and deploy to production. You write end-to-end features and debug across the stack.",
+    },
+    {
+        "name": "debugging",
+        "category": "utilities",
+        "description": "Debugging & troubleshooting — find and fix bugs fast in any language",
+        "system_prompt": "You are an expert debugger. You analyze error messages, stack traces, and code to find root causes quickly. You work in any language (JS, Python, Go, Rust, etc.) and provide step-by-step fixes, explain why bugs happen, and suggest prevention strategies. You reproduce issues, isolate variables, and verify fixes.",
+    },
+    {
+        "name": "code-review",
+        "category": "utilities",
+        "description": "Code review — security, performance, best practices, maintainability",
+        "system_prompt": "You are an expert code reviewer. You analyze code for security vulnerabilities, performance bottlenecks, code smells, and maintainability issues. You suggest concrete improvements, refactorings, and best practices for the language and framework being used. You write constructive, actionable feedback.",
+    },
+    {
+        "name": "api-design",
+        "category": "development",
+        "description": "API design — REST, GraphQL, OpenAPI, versioning, authentication",
+        "system_prompt": "You are an API design expert. You design RESTful APIs, GraphQL schemas, and OpenAPI/Swagger specifications. You handle versioning, authentication (JWT, OAuth, API keys), rate limiting, pagination, error handling, and documentation. You create developer-friendly, well-documented APIs.",
+    },
+    {
+        "name": "sql-database",
+        "category": "development",
+        "description": "SQL database design — schemas, queries, optimization, migrations",
+        "system_prompt": "You are a database expert. You design SQL schemas, write optimized queries, create indexes, plan migrations, and normalize/denormalize data. You work with PostgreSQL, MySQL, SQLite, and explain query execution plans. You prioritize data integrity, performance, and scalability.",
+    },
+]
+
+SKILLS_JSON = json.dumps(BUILTIN_SKILLS, indent=2)
+
 DAEMON_SPAWN = r"""#!/usr/bin/env python3
 import os
 import sys
@@ -194,8 +249,10 @@ case "$1" in
     backup)  python3 "$SETUP" backup ;;
     restore) python3 "$SETUP" restore "${2:-}" ;;
     watchdog) python3 "$SETUP" watchdog ;;
+    skills)  python3 "$SETUP" skills "${2:-list}" "${3:-}" ;;
+    models)  python3 "$SETUP" models "${2:-list}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|logs|update|uninstall|backup|restore [file]|watchdog}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|add|remove|show|install] [name]|models [list|best]}"; exit 1 ;;
 esac
 """
 
@@ -453,6 +510,159 @@ def write_daemon_spawner():
 # ── Config ──
 def write_config():
     CONFIG_FILE.write_text(json.dumps(CONFIG_JSON, indent=2))
+
+
+# ── Skills ──
+def write_skills(dry_run=False):
+    """Install built-in skills into SKILLS_DIR."""
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    if dry_run:
+        info(f"[dry-run] Would install {len(BUILTIN_SKILLS)} built-in skills to {SKILLS_DIR}")
+        return
+    count = 0
+    for skill in BUILTIN_SKILLS:
+        skill_file = SKILLS_DIR / f"{skill['name']}.json"
+        if not skill_file.exists():
+            skill_file.write_text(json.dumps(skill, indent=2))
+            count += 1
+    if count > 0:
+        success(f"Installed {count} built-in skills to {SKILLS_DIR}")
+    else:
+        info("All built-in skills already installed.")
+
+
+def do_skills(subcmd="list", name=""):
+    """Manage skills: list, add, remove, show, install."""
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if subcmd == "list":
+        header("Available Skills")
+        skill_files = sorted(SKILLS_DIR.glob("*.json"))
+        if not skill_files:
+            warn("No skills installed. Run 'opencode-proxy skills install' to add built-in skills.")
+            return
+        for sf in skill_files:
+            try:
+                skill = json.loads(sf.read_text())
+                print(f"  {GREEN}{skill.get('name', sf.stem)}{NC}  {CYAN}[{skill.get('category', '?')}] {NC}{skill.get('description', '')}")
+            except Exception:
+                print(f"  {YELLOW}{sf.stem}{NC}  (invalid skill file)")
+        info(f"\nUse: opencode-proxy skills show <name>  |  opencode-proxy skills add <name>")
+
+    elif subcmd == "install":
+        header("Install Built-in Skills")
+        write_skills()
+
+    elif subcmd == "show":
+        if not name:
+            error("Usage: opencode-proxy skills show <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if not skill_file.exists():
+            error(f"Skill '{name}' not found. Run 'opencode-proxy skills list' to see available skills.")
+            return
+        skill = json.loads(skill_file.read_text())
+        header(f"Skill: {skill.get('name', name)}")
+        info(f"Category : {skill.get('category', '?')}")
+        info(f"Description: {skill.get('description', '')}")
+        print(f"\n{MAGENTA}System Prompt:{NC}")
+        print(skill.get("system_prompt", ""))
+        info(f"\nTo use this skill in OpenCode, add it to your system prompt or model configuration.")
+
+    elif subcmd == "add":
+        if not name:
+            error("Usage: opencode-proxy skills add <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if skill_file.exists():
+            warn(f"Skill '{name}' already exists.")
+            return
+        desc = input("Enter skill description: ").strip()
+        category = input("Enter skill category (e.g. development, design, utilities): ").strip()
+        system_prompt = input("Enter system prompt for this skill: ").strip()
+        skill = {
+            "name": name,
+            "category": category or "custom",
+            "description": desc or f"Custom skill: {name}",
+            "system_prompt": system_prompt or f"You are an expert in {name}."
+        }
+        skill_file.write_text(json.dumps(skill, indent=2))
+        success(f"Skill '{name}' created at {skill_file}")
+
+    elif subcmd == "remove":
+        if not name:
+            error("Usage: opencode-proxy skills remove <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if not skill_file.exists():
+            error(f"Skill '{name}' not found.")
+            return
+        skill_file.unlink()
+        success(f"Removed skill '{name}'")
+
+    else:
+        error(f"Unknown skills subcommand: {subcmd}")
+        info("Usage: opencode-proxy skills {list|add|remove|show|install} [name]")
+
+
+def do_models(subcmd="list"):
+    """Detect and rank free models from the gateway."""
+    header("OpenCode Free Models")
+
+    try:
+        data = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=5).read().decode())
+    except Exception as e:
+        error(f"Cannot reach proxy at {API_URL}/healthz — is the proxy running? ({e})")
+        info("Start it with: opencode-proxy start")
+        return
+
+    models = data.get("models", {})
+    total = models.get("total", 0)
+    exposed = models.get("exposed", 0)
+
+    if subcmd == "list":
+        info(f"Total upstream: {total}  |  Exposed free: {exposed}")
+        print()
+        # Known model info for ranking
+        model_info = {
+            "deepseek-v4.1-flash-free": {"use": "Code, algorithms, refactoring", "ctx": "128K", "rank": 1},
+            "crouton-alpha-free": {"use": "Massive context, multimodal docs", "ctx": "1M", "rank": 2},
+            "nemotron-3.5-super-vl-free": {"use": "Vision-language tasks", "ctx": "1M", "rank": 3},
+            "beam-free": {"use": "Step-by-step logic", "ctx": "1M", "rank": 4},
+            "pulse-alpha-free": {"use": "Multimodal input", "ctx": "1M", "rank": 5},
+            "big-pickle": {"use": "Multi-step reasoning, planning", "ctx": "200K", "rank": 6},
+            "nemotron-3.5-lightning-free": {"use": "Low-latency scripts, commands", "ctx": "262K", "rank": 7},
+            "glm-5.3-flash-free": {"use": "General knowledge", "ctx": "128K", "rank": 8},
+            "flint-40b-free": {"use": "Open-weight foundation", "ctx": "128K", "rank": 9},
+            "mimo-v2.6-flash-free": {"use": "Compact quick assistant", "ctx": "128K", "rank": 10},
+        }
+        # Sort by rank
+        sorted_models = sorted(model_info.items(), key=lambda x: x[1]["rank"])
+        print(f"  {BOLD}{'Model':<35} {'Context':<10} {'Best For'}{NC}")
+        print(f"  {BOLD}{'-'*35} {'-'*10} {'-'*40}{NC}")
+        for mname, minfo in sorted_models:
+            mark = " ★" if minfo["rank"] <= 3 else ""
+            print(f"  {GREEN}{mname:<35}{NC} {BLUE}{minfo['ctx']:<10}{NC} {minfo['use']}{mark}")
+        print(f"\n{CYAN}★ = Top 3 recommended free models{NC}")
+        info("Use a model in OpenCode: opencode-unlimited-proxy/<model-id>")
+
+    elif subcmd == "best":
+        best = [
+            ("deepseek-v4.1-flash-free", "Code, algorithms, refactoring", "128K"),
+            ("crouton-alpha-free", "Massive context, multimodal docs", "1M"),
+            ("nemotron-3.5-super-vl-free", "Vision-language tasks", "1M"),
+        ]
+        header("Top 3 Free Models")
+        for i, (mname, use, ctx) in enumerate(best, 1):
+            print(f"  {BOLD}{i}. {mname}{NC}")
+            print(f"     Use: {use}  |  Context: {ctx}")
+            print(f"     In OpenCode: opencode-unlimited-proxy/{mname}")
+            print()
+        info("These are the highest-quality free-tier models detected from OpenCode's catalog.")
+
+    else:
+        error(f"Unknown models subcommand: {subcmd}")
+        info("Usage: opencode-proxy models {list|best}")
 
 
 # ── Manager CLI ──
@@ -941,6 +1151,7 @@ def do_install():
     write_config()
     write_manager()
     write_unlimited_launcher()
+    write_skills()
     install_opencode_cli()
     write_opencode_config()
     ensure_path()
@@ -948,6 +1159,8 @@ def do_install():
     success("Run 'opencode-unlimited' to start gateway + CLI together.")
     info("Or use 'opencode-proxy start' then 'opencode' separately.")
     info("Manage: 'opencode-unlimited {start|stop|restart|status}'")
+    info("Skills:  'opencode-proxy skills {list|install|show|add|remove}'")
+    info("Models:  'opencode-proxy models {list|best}'")
 
 
 # ── CLI ──
@@ -957,10 +1170,11 @@ def main():
                     choices=["install", "start", "stop", "restart", "status",
                              "test", "logs", "update", "uninstall", "backup",
                              "restore", "watchdog", "version", "validate",
-                             "dry-run"],
+                             "dry-run", "skills", "models"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
+    ap.add_argument("skill_name", nargs="?", default="")
     args = ap.parse_args()
     if args.action == "install":
         do_install()
@@ -992,6 +1206,10 @@ def main():
         do_validate()
     elif args.action == "dry-run":
         do_install_dry_run()
+    elif args.action == "skills":
+        do_skills(args.model, args.skill_name)
+    elif args.action == "models":
+        do_models(args.model)
 
 
 if __name__ == "__main__":

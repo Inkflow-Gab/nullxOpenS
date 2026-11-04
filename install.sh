@@ -22,16 +22,28 @@ fi
 echo -e "${BLUE}=== OpenCode Termux Unlimited Installer ===${NC}"
 
 # --- dependencies ---
+USE_APT=0
+command -v apt-get >/dev/null 2>&1 && USE_APT=1
+
 NEEDED=()
-for pkg in curl jq proot termux-tools python; do
+for pkg in curl jq proot python3 python; do
     command -v "$pkg" >/dev/null 2>&1 || NEEDED+=("$pkg")
 done
-command -v grun >/dev/null 2>&1 || NEEDED+=("glibc-repo" "glibc-runner")
+if [ "$USE_APT" -eq 0 ]; then
+    # Termux-only: add glibc packages and termux-tools
+    command -v grun >/dev/null 2>&1 || NEEDED+=("glibc-repo" "glibc-runner")
+    command -v termux-chroot >/dev/null 2>&1 || NEEDED+=("termux-tools")
+fi
 
 if [ ${#NEEDED[@]} -gt 0 ]; then
     cprint "Installing: ${NEEDED[*]}" "$BLUE"
-    pkg update -y
-    pkg install -y "${NEEDED[@]}"
+    if [ "$USE_APT" -eq 1 ]; then
+        apt-get update -y
+        apt-get install -y "${NEEDED[@]}"
+    else
+        pkg update -y
+        pkg install -y "${NEEDED[@]}"
+    fi
 fi
 
 # --- directories ---
@@ -124,7 +136,10 @@ if [ ! -f "$LOCAL_BIN/opencode-bin" ]; then
 fi
 
 # Detect environment for wrapper
-if command -v pkg >/dev/null 2>&1 && [ -d "/data/data/com.termux" ]; then
+if command -v apt-get >/dev/null 2>&1; then
+    WRAPPER_SHELL="/usr/bin/env bash"
+    WRAPPER_EXEC="exec \"$HOME/.local/bin/opencode-bin\" \"$@\""
+elif command -v pkg >/dev/null 2>&1 && [ -d "/data/data/com.termux" ]; then
     WRAPPER_SHELL="/data/data/com.termux/files/usr/bin/bash"
     WRAPPER_EXEC="exec /data/data/com.termux/files/usr/bin/grun \"$HOME/.local/bin/opencode-bin\" \"$@\""
 else

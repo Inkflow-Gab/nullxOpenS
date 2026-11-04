@@ -1109,16 +1109,18 @@ wait_for_proxy() {
 
 case "$1" in
     start)
-        "$PROXY" start
-        if wait_for_proxy; then
-            if [ "$2" = "--continue" ]; then
-                exec "$CLI" --continue
-            else
-                exec "$CLI"
+        # Start proxy only if it's not already healthy
+        if ! curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+            "$PROXY" start
+            if ! wait_for_proxy; then
+                echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+                exit 1
             fi
+        fi
+        if [ "$2" = "--continue" ]; then
+            exec "$CLI" --continue
         else
-            echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
-            exit 1
+            exec "$CLI"
         fi
         ;;
     stop)

@@ -1,4 +1,4 @@
-# OpenCode UNLIMITED
+# OpenCode UNLIMITED 🚀
 
 OpenCode Unlimited on Android (Termux) — rotating Cloudflare WARP egress pool for unlimited free OpenCode models. No root, no Docker, no external servers.
 
@@ -11,30 +11,33 @@ OpenCode Unlimited on Android (Termux) — rotating Cloudflare WARP egress pool 
 
 ---
 
-## About
+## About 📖
 
 OpenCode UNLIMITED is an all-in-one Python setup that installs and manages the `opencode2api` gateway plus the OpenCode CLI. It rotates through Cloudflare WARP IPv6 exits to eliminate per-IP rate limits on the anonymous free tier — giving you unlimited access to OpenCode's free models.
 
 Works on native Termux **and** inside `proot-distro login ubuntu` — it auto-detects `pkg` vs `apt` and skips Termux-only packages when not on Termux.
 
-Built and maintained by **null**.
+Built and maintained by **null** 🛠️
 
 ---
 
-## Features
+## Features ✨
 
 - One-command setup via `setup.py` (Termux + Ubuntu/proot-distro)
-- `opencode2api` v1.4.6 gateway with WARP IPv6 egress rotation
+- `opencode2api` v1.4.6 gateway with WARP IPv6 egress rotation 🌐
 - OpenCode CLI v1.19.5 via `glibc-runner` (`grun`)
 - Double-fork daemon spawner — survives terminal close
 - OpenAI-compatible `/v1` endpoint at `http://127.0.0.1:8080/v1`
 - Web dashboard at `http://127.0.0.1:8081`
 - 10 verified free-tier models exposed
+- **Skill system** — 400+ skills from alirezarezvani/claude-skills (search, categories, apply-skill, sync, add/remove)
+- **Model management** — switch, bench, and detect free models
+- **Diagnostics** — `doctor` command checks your whole setup
 - No Docker, no root, no external server required
 
 ---
 
-## Quick Start
+## Quick Start 🚀
 
 One command (works on Termux and proot-distro Ubuntu):
 
@@ -68,7 +71,7 @@ opencode
 
 ---
 
-## Commands
+## Commands 📋
 
 | Command | Description |
 |---------|-------------|
@@ -78,23 +81,42 @@ opencode
 | `opencode-proxy restart` | Restart the proxy daemon |
 | `opencode-proxy status` | Check daemon + WARP + model status |
 | `opencode-proxy test [model]` | Send a test chat request |
+| `opencode-proxy bench [model]` | Benchmark a model (time to first token) |
 | `opencode-proxy logs` | Stream recent proxy logs |
+| `opencode-proxy config` | Show current OpenCode configuration |
+| `opencode-proxy doctor` | Run system diagnostics |
+| `opencode-proxy sync` | Re-sync skills from claude-skills repo |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited stop` | Stop proxy + CLI |
 | `opencode-unlimited restart` | Restart proxy + CLI |
 | `opencode-unlimited status` | Check both proxy and CLI |
-| `opencode-proxy skills list` | List installed skills |
-| `opencode-proxy skills install` | Download skills from claude-skills repo (animation shown) |
+
+### Skills (from alirezarezvani/claude-skills) 🎯
+
+| Command | Description |
+|---------|-------------|
+| `opencode-proxy skills install` | Download skills from claude-skills repo |
+| `opencode-proxy skills sync` | Re-sync skills from claude-skills repo |
+| `opencode-proxy skills list` | List all installed skills |
+| `opencode-proxy skills categories` | List skill categories |
+| `opencode-proxy skills search <term>` | Search skills by name/category/description |
 | `opencode-proxy skills show <name>` | Show skill details & system prompt |
 | `opencode-proxy skills add <name>` | Create a custom skill |
 | `opencode-proxy skills remove <name>` | Remove a skill |
+| `opencode-proxy apply-skill <name>` | Apply a skill's system prompt to OpenCode config |
+
+### Models ⚡
+
+| Command | Description |
+|---------|-------------|
 | `opencode-proxy models list` | List all detected free models with rankings |
 | `opencode-proxy models best` | Show top 3 free models |
+| `opencode-proxy model <name>` | Switch default OpenCode model |
 
 ---
 
-## Architecture
+## Architecture 🏗️
 
 ```
 Android Device (Termux / Ubuntu proot-distro)
@@ -111,14 +133,14 @@ Android Device (Termux / Ubuntu proot-distro)
 
 ---
 
-## Models Exposed
+## Models Exposed ⚡
 
 | Model | Use Case | Context |
 |-------|----------|---------|
-| `deepseek-v4.1-flash-free` | Code, algorithms, refactoring | 128K |
+| `deepseek-v4.1-flash-free` | Code, algorithms, refactoring ⭐ | 128K |
 | `big-pickle` | Multi-step reasoning, planning | 200K |
-| `crouton-alpha-free` | Massive context, multimodal docs | 1M |
-| `nemotron-3.5-super-vl-free` | Vision-language tasks | 1M |
+| `crouton-alpha-free` | Massive context, multimodal docs ⭐ | 1M |
+| `nemotron-3.5-super-vl-free` | Vision-language tasks ⭐ | 1M |
 | `nemotron-3.5-lightning-free` | Low-latency scripts, commands | 262K |
 | `glm-5.3-flash-free` | General knowledge | 128K |
 | `beam-free` | Step-by-step logic | 1M |
@@ -126,11 +148,13 @@ Android Device (Termux / Ubuntu proot-distro)
 | `flint-40b-free` | Open-weight foundation | 128K |
 | `pulse-alpha-free` | Multimodal input | 1M |
 
+⭐ = Top 3 recommended free models
+
 ---
 
-## Skills
+## Skills 🎯
 
-OpenCode UNLIMITED downloads skills from **alirezarezvani/claude-skills** — 400+ production-ready skills across 20 domains (engineering, marketing, c-level, business, compliance, finance, productivity, research, and more). Each skill includes a system prompt that tells OpenCode how to behave for a specific task.
+OpenCode UNLIMITED downloads skills from **alirezarezvani/claude-skills** — 400+ production-ready skills across 20+ domains (engineering, marketing, c-level advisory, business, compliance, finance, productivity, research, and more). Each skill includes a system prompt that tells OpenCode how to behave for a specific task.
 
 ### Install skills
 
@@ -144,6 +168,18 @@ This shows a live progress bar while downloading skills from GitHub.
 
 ```bash
 opencode-proxy skills list
+```
+
+### Browse skill categories
+
+```bash
+opencode-proxy skills categories
+```
+
+### Search for a skill
+
+```bash
+opencode-proxy skills search frontend
 ```
 
 ### Show a skill's content
@@ -167,62 +203,41 @@ opencode-proxy skills remove my-web-skill
 
 ---
 
-## Using Skills Inside OpenCode
+## Applying Skills to OpenCode 🔧
 
-Skills are **system prompts** — you paste them into OpenCode to change how it behaves. Here's how:
+Skills are **system prompts** — they change how OpenCode behaves. Apply a skill directly to your OpenCode configuration:
 
-### Step 1: Get a skill's system prompt
-
-```bash
-opencode-proxy skills show frontend-dev
-```
-
-Copy the text under `System Prompt:` (everything after `Content:`).
-
-### Step 2: Start OpenCode
+### Step 1: Apply a skill
 
 ```bash
-opencode
+opencode-proxy apply-skill frontend-dev
 ```
 
-### Step 3: Use the skill inside OpenCode TUI
+This writes the skill's system prompt into your OpenCode config (`~/.config/opencode/opencode.jsonc`).
 
-Once OpenCode is running, you can type commands like:
-
-```
-/skill frontend-dev
-/skill agent-memory
-/skill code-review
-```
-
-Or use the skill's system prompt as your first message:
-
-> "You are an expert frontend developer. You build modern web applications using React..."
-
-**Common workflows:**
-
-| Task | Skill to use | What to type in OpenCode |
-|------|-------------|--------------------------|
-| Design a website | `web-design` | `/skill web-design` then describe your site |
-| Debug code | `debugging` | `/skill debugging` then paste your error |
-| Review code | `code-review` | `/skill code-review` then paste your code |
-| Build an API | `api-design` | `/skill api-design` then describe your endpoints |
-| SQL queries | `sql-database` | `/skill sql-database` then describe your data |
-
-### Step 4: Model detection (pick the best free model)
+### Step 2: Restart OpenCode
 
 ```bash
-opencode-proxy models best
+opencode-unlimited restart
 ```
 
-Then use that model in OpenCode:
+### Step 3: Use OpenCode normally
+
+OpenCode will now behave according to the skill's system prompt. Switch models if needed:
 
 ```bash
-/skill web-design
-# OpenCode now acts as a web design expert using the best free model
+opencode-proxy model crouton-alpha-free
 ```
 
-## Model Detection
+Or browse and preview skills before applying:
+
+```bash
+opencode-proxy skills show agent-memory
+```
+
+---
+
+## Model Detection & Switching 🔄
 
 OpenCode UNLIMITED detects free models from the OpenCode gateway and ranks them by quality and context window:
 
@@ -231,14 +246,39 @@ opencode-proxy models list
 opencode-proxy models best
 ```
 
+Switch your default model:
+
+```bash
+opencode-proxy model deepseek-v4.1-flash-free
+```
+
+Then restart OpenCode:
+
+```bash
+opencode-unlimited restart
+```
+
 ---
 
-## Credits
+## Diagnostics 🩺
+
+Check that your whole setup is healthy:
+
+```bash
+opencode-proxy doctor
+```
+
+This verifies Python, architecture, packages, binaries, configs, skills, and gateway connectivity — and gives you actionable fix suggestions.
+
+---
+
+## Credits 🏅
 
 - **Development & Creator**: null
 - `ebouther/opencode-unlimited-proxy` — free-tier gate research & multi-egress rotation strategy
 - `jasonxu114514/opencode2api` — Go gateway engine + WARP userspace egress manager
 - OpenCode — open-source terminal coding assistant
+- `alirezarezvani/claude-skills` — 400+ production-ready skill prompts
 
 ---
 

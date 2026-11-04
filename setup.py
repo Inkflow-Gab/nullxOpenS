@@ -19,7 +19,9 @@ import socket
 import tempfile
 from pathlib import Path
 
-# ── Colors ──
+# ════════════════════════════════════════════════════════════════════════════
+# Colors
+# ════════════════════════════════════════════════════════════════════════════
 RED = "\033[0;31m"
 GREEN = "\033[0;32m"
 BLUE = "\033[0;34m"
@@ -27,6 +29,7 @@ YELLOW = "\033[1;33m"
 CYAN = "\033[0;36m"
 MAGENTA = "\033[0;35m"
 BOLD = "\033[1m"
+DIM = "\033[2m"
 NC = "\033[0m"
 
 
@@ -35,7 +38,7 @@ def cprint(msg, color=NC):
 
 
 def header(msg):
-    cprint(f"\n{BOLD}{CYAN}=== {msg} ==={NC}", CYAN)
+    cprint(f"\n{BOLD}{CYAN}═══ {msg} ═══{NC}", CYAN)
 
 
 def success(msg):
@@ -62,7 +65,9 @@ def run(cmd, check=True, capture=False):
     return subprocess.run(cmd, check=check, capture_output=capture, text=True)
 
 
-# ── Paths ──
+# ════════════════════════════════════════════════════════════════════════════
+# Paths
+# ════════════════════════════════════════════════════════════════════════════
 HOME = Path.home()
 BASE_DIR = HOME / ".opencode-proxy"
 BIN_DIR = BASE_DIR / "bin"
@@ -148,7 +153,9 @@ CONFIG_JSON = {
     }
 }
 
-# ── Skills Repo (alirezarezvani/claude-skills) ──
+# ════════════════════════════════════════════════════════════════════════════
+# Skills Repo (alirezarezvani/claude-skills)
+# ════════════════════════════════════════════════════════════════════════════
 SKILLS_REPO_API = "https://api.github.com/repos/alirezarezvani/claude-skills/git/trees/main?recursive=1"
 SKILLS_RAW_BASE = "https://raw.githubusercontent.com/alirezarezvani/claude-skills/main/"
 
@@ -162,7 +169,6 @@ def parse_skill_md(content: str) -> dict:
         "system_prompt": "",
         "raw": content,
     }
-    # Extract YAML frontmatter
     if content.startswith("---\n"):
         end = content.find("\n---\n", 4)
         if end != -1:
@@ -180,7 +186,6 @@ def parse_skill_md(content: str) -> dict:
                         skill["description"] = val
                     elif key == "license":
                         skill["license"] = val
-            # category from metadata or default
             skill["category"] = "claude-skills"
     else:
         skill["raw"] = content.strip()
@@ -205,11 +210,10 @@ def fetch_all_skills() -> list:
     for item in tree:
         path = item.get("path", "")
         if item.get("type") == "blob" and path.endswith("SKILL.md"):
-            # Derive category from path: engineering/agent-memory/skills/agent-memory/SKILL.md
             parts = path.split("/")
             if len(parts) >= 4:
-                category = parts[0]  # e.g. engineering, marketing
-                skill_name = parts[-2]  # e.g. agent-memory
+                category = parts[0]
+                skill_name = parts[-2]
             else:
                 category = "claude-skills"
                 skill_name = Path(path).stem
@@ -270,7 +274,6 @@ def write_skills(dry_run=False):
             continue
         skill_file.write_text(json.dumps(skill, indent=2))
         count += 1
-    # Clear the progress line and show completion
     print(f"\r  {GREEN}[✓]{NC} Done — installed {count}/{len(skills)} skills to {SKILLS_DIR}      ")
     if count > 0:
         success(f"Installed {count} skills from claude-skills repo.")
@@ -278,6 +281,441 @@ def write_skills(dry_run=False):
         info("All skills already installed.")
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# Skills Management
+# ════════════════════════════════════════════════════════════════════════════
+def do_skills(subcmd="list", name=""):
+    """Manage skills: list, add, remove, show, install, sync, search, categories."""
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
+    if subcmd == "list":
+        header("Available Skills")
+        skill_files = sorted(SKILLS_DIR.glob("*.json"))
+        if not skill_files:
+            warn("No skills installed. Run 'opencode-proxy skills install' to download from claude-skills repo.")
+            return
+        for sf in skill_files:
+            try:
+                skill = json.loads(sf.read_text())
+                desc = skill.get("description", "")
+                if len(desc) > 60:
+                    desc = desc[:57] + "..."
+                print(f"  {GREEN}{skill.get('name', sf.stem)}{NC}  {CYAN}[{skill.get('category', '?')}] {NC}{desc}")
+            except Exception:
+                print(f"  {YELLOW}{sf.stem}{NC}  (invalid skill file)")
+        info(f"\nTotal: {len(skill_files)} skills")
+        info("Use: opencode-proxy skills show <name>  |  opencode-proxy skills search <term>  |  opencode-proxy skills categories")
+
+    elif subcmd == "install":
+        header("Install Skills from claude-skills repo")
+        write_skills()
+
+    elif subcmd == "sync":
+        header("Sync Skills from claude-skills repo")
+        write_skills()
+
+    elif subcmd == "search":
+        if not name:
+            error("Usage: opencode-proxy skills search <term>")
+            return
+        header(f"Search Skills: '{name}'")
+        skill_files = sorted(SKILLS_DIR.glob("*.json"))
+        if not skill_files:
+            warn("No skills installed. Run 'opencode-proxy skills install' first.")
+            return
+        term_lower = name.lower()
+        found = False
+        for sf in skill_files:
+            try:
+                skill = json.loads(sf.read_text())
+                haystack = f"{skill.get('name','')} {skill.get('category','')} {skill.get('description','')} {skill.get('raw','')}".lower()
+                if term_lower in haystack:
+                    desc = skill.get("description", "")
+                    if len(desc) > 60:
+                        desc = desc[:57] + "..."
+                    print(f"  {GREEN}{skill.get('name', sf.stem)}{NC}  {CYAN}[{skill.get('category', '?')}] {NC}{desc}")
+                    found = True
+            except Exception:
+                pass
+        if not found:
+            warn(f"No skills matching '{name}' found.")
+        else:
+            info(f"\nUse: opencode-proxy skills show <name>")
+
+    elif subcmd == "categories":
+        header("Skill Categories")
+        skill_files = sorted(SKILLS_DIR.glob("*.json"))
+        if not skill_files:
+            warn("No skills installed. Run 'opencode-proxy skills install' first.")
+            return
+        cats = {}
+        for sf in skill_files:
+            try:
+                skill = json.loads(sf.read_text())
+                cat = skill.get("category", "uncategorized")
+                cats.setdefault(cat, []).append(skill)
+            except Exception:
+                pass
+        for cat, skills_list in sorted(cats.items()):
+            print(f"  {MAGENTA}{cat}{NC}  {DIM}({len(skills_list)} skills){NC}")
+            for s in skills_list[:5]:
+                print(f"    {GREEN}{s.get('name')}{NC}  {DIM}- {s.get('description','')[:50]}{NC}")
+            if len(skills_list) > 5:
+                print(f"    {DIM}... and {len(skills_list) - 5} more{NC}")
+            print()
+
+    elif subcmd == "show":
+        if not name:
+            error("Usage: opencode-proxy skills show <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if not skill_file.exists():
+            error(f"Skill '{name}' not found. Run 'opencode-proxy skills list' to see available skills.")
+            return
+        skill = json.loads(skill_file.read_text())
+        header(f"Skill: {skill.get('name', name)}")
+        info(f"Category : {skill.get('category', '?')}")
+        info(f"Source   : {skill.get('source', 'custom')}")
+        info(f"Description: {skill.get('description', '')}")
+        print(f"\n{MAGENTA}Skill Content (SKILL.md):{NC}")
+        raw = skill.get("raw", "")
+        if raw:
+            if len(raw) > 2000:
+                print(raw[:2000])
+                print(f"\n{YELLOW}... (truncated, full content in {skill_file}){NC}")
+            else:
+                print(raw)
+        else:
+            print(skill.get("system_prompt", "(no content)"))
+        info(f"\nTo use this skill in OpenCode, add the system prompt to your model configuration.")
+        info(f"Skill file: {skill_file}")
+
+    elif subcmd == "apply-skill":
+        if not name:
+            error("Usage: opencode-proxy apply-skill <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if not skill_file.exists():
+            error(f"Skill '{name}' not found. Run 'opencode-proxy skills list' to see available skills.")
+            return
+        skill = json.loads(skill_file.read_text())
+        system_prompt = skill.get("raw") or skill.get("system_prompt", "")
+        if not system_prompt:
+            error(f"Skill '{name}' has no system prompt content.")
+            return
+        write_opencode_config_with_skill(system_prompt, skill.get("name", name))
+        success(f"Skill '{name}' applied to OpenCode config. Restart OpenCode to use it.")
+
+    elif subcmd == "add":
+        if not name:
+            error("Usage: opencode-proxy skills add <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if skill_file.exists():
+            warn(f"Skill '{name}' already exists.")
+            return
+        desc = input("Enter skill description: ").strip()
+        category = input("Enter skill category (e.g. development, design, utilities): ").strip()
+        system_prompt = input("Enter system prompt for this skill: ").strip()
+        skill = {
+            "name": name,
+            "category": category or "custom",
+            "description": desc or f"Custom skill: {name}",
+            "system_prompt": system_prompt or f"You are an expert in {name}.",
+            "raw": system_prompt or f"You are an expert in {name}.",
+            "source": "custom",
+        }
+        skill_file.write_text(json.dumps(skill, indent=2))
+        success(f"Skill '{name}' created at {skill_file}")
+
+    elif subcmd == "remove":
+        if not name:
+            error("Usage: opencode-proxy skills remove <name>")
+            return
+        skill_file = SKILLS_DIR / f"{name}.json"
+        if not skill_file.exists():
+            error(f"Skill '{name}' not found.")
+            return
+        skill_file.unlink()
+        success(f"Removed skill '{name}'")
+
+    else:
+        error(f"Unknown skills subcommand: {subcmd}")
+        info("Usage: opencode-proxy skills {list|install|sync|search|categories|show|add|remove|apply-skill} [name]")
+
+
+def write_opencode_config_with_skill(system_prompt: str, skill_name: str):
+    """Write OpenCode config with a skill's system prompt as the default model instructions."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "model": "opencode-unlimited-proxy/deepseek-v4.1-flash-free",
+        "system_prompt": system_prompt,
+        "permission": {
+            "*": "allow", "bash": "allow", "read": "allow", "write": "allow",
+            "edit": "allow", "glob": "allow", "grep": "allow", "list": "allow", "websearch": "allow"
+        },
+        "provider": {
+            "opencode-unlimited-proxy": {
+                "npm": "@ai-sdk/openai-compatible",
+                "name": "opencode-unlimited-proxy",
+                "options": {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": "local-test-key"},
+                "models": {
+                    "beam-free": {}, "big-pickle": {}, "crouton-alpha-free": {},
+                    "deepseek-v4.1-flash-free": {}, "flint-40b-free": {}, "glm-5.3-flash-free": {},
+                    "mimo-v2.6-flash-free": {}, "nemotron-3.5-lightning-free": {},
+                    "nemotron-3.5-super-vl-free": {}, "pulse-alpha-free": {}
+                }
+            }
+        }
+    }
+    OPENCODE_JSONC.write_text(json.dumps(config, indent=2))
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Model Management
+# ════════════════════════════════════════════════════════════════════════════
+MODEL_INFO = {
+    "deepseek-v4.1-flash-free": {"use": "Code, algorithms, refactoring", "ctx": "128K", "rank": 1},
+    "crouton-alpha-free": {"use": "Massive context, multimodal docs", "ctx": "1M", "rank": 2},
+    "nemotron-3.5-super-vl-free": {"use": "Vision-language tasks", "ctx": "1M", "rank": 3},
+    "beam-free": {"use": "Step-by-step logic", "ctx": "1M", "rank": 4},
+    "pulse-alpha-free": {"use": "Multimodal input", "ctx": "1M", "rank": 5},
+    "big-pickle": {"use": "Multi-step reasoning, planning", "ctx": "200K", "rank": 6},
+    "nemotron-3.5-lightning-free": {"use": "Low-latency scripts, commands", "ctx": "262K", "rank": 7},
+    "glm-5.3-flash-free": {"use": "General knowledge", "ctx": "128K", "rank": 8},
+    "flint-40b-free": {"use": "Open-weight foundation", "ctx": "128K", "rank": 9},
+    "mimo-v2.6-flash-free": {"use": "Compact quick assistant", "ctx": "128K", "rank": 10},
+}
+
+
+def do_models(subcmd="list"):
+    """Detect and rank free models from the gateway."""
+    header("OpenCode Free Models")
+
+    try:
+        data = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=5).read().decode())
+    except Exception as e:
+        error(f"Cannot reach proxy at {API_URL}/healthz — is the proxy running? ({e})")
+        info("Start it with: opencode-proxy start")
+        return
+
+    models = data.get("models", {})
+    total = models.get("total", 0)
+    exposed = models.get("exposed", 0)
+
+    if subcmd == "list":
+        info(f"Total upstream: {total}  |  Exposed free: {exposed}")
+        print()
+        sorted_models = sorted(MODEL_INFO.items(), key=lambda x: x[1]["rank"])
+        print(f"  {BOLD}{'Model':<35} {'Context':<10} {'Best For'}{NC}")
+        print(f"  {BOLD}{'-'*35} {'-'*10} {'-'*40}{NC}")
+        for mname, minfo in sorted_models:
+            mark = " ★" if minfo["rank"] <= 3 else ""
+            print(f"  {GREEN}{mname:<35}{NC} {BLUE}{minfo['ctx']:<10}{NC} {minfo['use']}{mark}")
+        print(f"\n{CYAN}★ = Top 3 recommended free models{NC}")
+        info("Use a model in OpenCode: opencode-unlimited-proxy/<model-id>")
+        info("Switch model: opencode-proxy model <model-id>")
+
+    elif subcmd == "best":
+        best = [
+            ("deepseek-v4.1-flash-free", "Code, algorithms, refactoring", "128K"),
+            ("crouton-alpha-free", "Massive context, multimodal docs", "1M"),
+            ("nemotron-3.5-super-vl-free", "Vision-language tasks", "1M"),
+        ]
+        header("Top 3 Free Models")
+        for i, (mname, use, ctx) in enumerate(best, 1):
+            print(f"  {BOLD}{i}. {mname}{NC}")
+            print(f"     Use: {use}  |  Context: {ctx}")
+            print(f"     In OpenCode: opencode-unlimited-proxy/{mname}")
+            print()
+        info("These are the highest-quality free-tier models detected from OpenCode's catalog.")
+
+    else:
+        error(f"Unknown models subcommand: {subcmd}")
+        info("Usage: opencode-proxy models {list|best}")
+
+
+def do_model(name=""):
+    """Switch the default OpenCode model."""
+    if not name:
+        error("Usage: opencode-proxy model <model-id>")
+        info("Available models: " + ", ".join(MODEL_INFO.keys()))
+        return
+
+    header(f"Switching Model to: {name}")
+
+    # Read current config
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    current_config = {}
+    if OPENCODE_JSONC.exists():
+        try:
+            current_config = json.loads(OPENCODE_JSONC.read_text())
+        except Exception:
+            pass
+
+    current_config["model"] = f"opencode-unlimited-proxy/{name}"
+    OPENCODE_JSONC.write_text(json.dumps(current_config, indent=2))
+    success(f"Default model switched to: {name}")
+    info("Restart OpenCode to apply: opencode-unlimited restart")
+
+
+def do_bench(model=""):
+    """Benchmark/test a model."""
+    if not model:
+        error("Usage: opencode-proxy bench <model-id>")
+        info("Example: opencode-proxy bench deepseek-v4.1-flash-free")
+        return
+
+    header(f"Benchmarking: {model}")
+    info("Sending test prompt...")
+
+    payload = json.dumps({
+        "model": f"opencode-unlimited-proxy/{model}",
+        "messages": [{"role": "user", "content": "Count from 1 to 5 and say hello."}],
+        "stream": True
+    }).encode()
+
+    start = time.time()
+    req = urllib.request.Request(API_URL + "/v1/chat/completions",
+                                 data=payload,
+                                 headers={"Authorization": f"Bearer {API_KEY}",
+                                          "Content-Type": "application/json"})
+    try:
+        first_token_time = None
+        with urllib.request.urlopen(req) as resp:
+            for line in resp:
+                line = line.decode().strip()
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data == "[DONE]":
+                        break
+                    try:
+                        obj = json.loads(data)
+                        content = obj.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if content and first_token_time is None:
+                            first_token_time = time.time() - start
+                        if content:
+                            print(content, end="", flush=True)
+                    except json.JSONDecodeError:
+                        pass
+        total_time = time.time() - start
+        print()
+        success(f"Benchmark complete!")
+        info(f"Total time: {total_time:.2f}s")
+        if first_token_time:
+            info(f"First token: {first_token_time:.2f}s")
+    except Exception as e:
+        error(f"Benchmark failed: {e}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Config
+# ════════════════════════════════════════════════════════════════════════════
+def do_config():
+    """Show current configuration."""
+    header("OpenCode Configuration")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    if OPENCODE_JSONC.exists():
+        info(f"Config file: {OPENCODE_JSONC}")
+        print()
+        print(OPENCODE_JSONC.read_text())
+    else:
+        warn("opencode.jsonc not found.")
+
+    if CONFIG_FILE.exists():
+        info(f"\nGateway config: {CONFIG_FILE}")
+    else:
+        warn("Gateway config.json not found.")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Doctor / Diagnostics
+# ════════════════════════════════════════════════════════════════════════════
+def do_doctor():
+    """Run diagnostics on the setup."""
+    header("Doctor — System Diagnostics")
+    checks = []
+
+    # Python version
+    py_ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    checks.append(("Python", py_ver, True))
+
+    # Architecture
+    checks.append(("Architecture", ARCH, ARCH in ("aarch64", "arm64")))
+
+    # Environment
+    env = detect_env()
+    checks.append(("Environment", env, True))
+
+    # Dependencies
+    for pkg in REQUIRED_PKGS:
+        present = which(pkg) is not None
+        checks.append((f"Package: {pkg}", "installed" if present else "missing", present))
+
+    if env == "termux":
+        for pkg in GLIBC_PKGS:
+            present = which(pkg) is not None
+            checks.append((f"Package: {pkg}", "installed" if present else "missing", present))
+
+    # Binaries
+    checks.append(("opencode2api binary", "present" if ENGINE_BIN.exists() else "missing", ENGINE_BIN.exists()))
+    checks.append(("OpenCode CLI binary", "present" if OPENCODE_BIN.exists() else "missing", OPENCODE_BIN.exists()))
+    checks.append(("opencode wrapper", "present" if OPENCODE_WRAPPER.exists() else "missing", OPENCODE_WRAPPER.exists()))
+
+    # Configs
+    checks.append(("gateway config", "present" if CONFIG_FILE.exists() else "missing", CONFIG_FILE.exists()))
+    checks.append(("opencode.jsonc", "present" if OPENCODE_JSONC.exists() else "missing", OPENCODE_JSONC.exists()))
+
+    # Skills
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    skill_count = len(list(SKILLS_DIR.glob("*.json")))
+    checks.append(("installed skills", f"{skill_count} files", skill_count > 0))
+
+    # Gateway health
+    gw_healthy = health_ok()
+    checks.append(("gateway health", "online" if gw_healthy else "offline", gw_healthy))
+
+    # Print results
+    all_ok = True
+    for name, status, ok in checks:
+        icon = "✓" if ok else "✗"
+        color = GREEN if ok else RED
+        cprint(f"  {icon} {name}: {color}{status}{NC}")
+        if not ok:
+            all_ok = False
+
+    print()
+    if all_ok:
+        success("All checks passed!")
+    else:
+        warn("Some checks failed. Review the items marked ✗ above.")
+
+    # Suggestions
+    print(f"\n{CYAN}Suggestions:{NC}")
+    if not ENGINE_BIN.exists():
+        info("Run: python3 setup.py install  (to install opencode2api engine)")
+    if not OPENCODE_BIN.exists():
+        info("Run: python3 setup.py install  (to install OpenCode CLI)")
+    if not gw_healthy:
+        info("Run: opencode-proxy start  (to start the gateway)")
+    if skill_count == 0:
+        info("Run: opencode-proxy skills install  (to download skills)")
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Sync skills
+# ════════════════════════════════════════════════════════════════════════════
+def do_sync():
+    """Re-sync skills from claude-skills repo."""
+    header("Syncing Skills from claude-skills repo")
+    write_skills()
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Daemon spawner
+# ════════════════════════════════════════════════════════════════════════════
 DAEMON_SPAWN = r"""#!/usr/bin/env python3
 import os
 import sys
@@ -319,6 +757,7 @@ case "$1" in
     restart) python3 "$SETUP" restart ;;
     status)  python3 "$SETUP" status ;;
     test)    python3 "$SETUP" test "${2:-deepseek-v4.1-flash-free}" ;;
+    bench)   python3 "$SETUP" bench "${2:-deepseek-v4.1-flash-free}" ;;
     logs)    python3 "$SETUP" logs ;;
     update)  python3 "$SETUP" update ;;
     uninstall) python3 "$SETUP" uninstall ;;
@@ -327,8 +766,13 @@ case "$1" in
     watchdog) python3 "$SETUP" watchdog ;;
     skills)  python3 "$SETUP" skills "${2:-list}" "${3:-}" ;;
     models)  python3 "$SETUP" models "${2:-list}" ;;
+    model)   python3 "$SETUP" model "${2:-}" ;;
+    config)  python3 "$SETUP" config ;;
+    doctor)  python3 "$SETUP" doctor ;;
+    sync)    python3 "$SETUP" sync ;;
+    apply-skill) python3 "$SETUP" skills apply-skill "${2:-}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|add|remove|show|install] [name]|models [list|best]}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>}"; exit 1 ;;
 esac
 """
 
@@ -376,7 +820,9 @@ OPENCODE_JSONC_CONTENT = """{
 """
 
 
-# ── Environment detection ──
+# ════════════════════════════════════════════════════════════════════════════
+# Environment detection
+# ════════════════════════════════════════════════════════════════════════════
 def detect_env():
     """Return 'termux' or 'linux'.
 
@@ -414,7 +860,6 @@ def fix_dns():
         content = resolv.read_text()
     except Exception:
         return
-    # If only localhost nameservers, replace with a public one
     nameservers = []
     for line in content.splitlines():
         line = line.strip()
@@ -437,14 +882,12 @@ def fix_dns():
             warn(f"Could not fix /etc/resolv.conf: {e}")
 
 
-# ── Arch check ──
 def check_arch():
     if ARCH not in ("aarch64", "arm64"):
         error(f"Architecture {ARCH} not supported. Requires aarch64/ARM64.")
         sys.exit(1)
 
 
-# ── Package install ──
 def install_packages(dry_run=False):
     env = detect_env()
     needed = [p for p in REQUIRED_PKGS if not which(p)]
@@ -507,7 +950,6 @@ def install_packages(dry_run=False):
     success("Dependencies installed.")
 
 
-# ── Download with live progress ──
 def download(url, dest):
     """Live single-line download progress (no spamming)."""
     info(f"Downloading {url}")
@@ -531,7 +973,6 @@ def download(url, dest):
     success("Download complete.")
 
 
-# ── Tarball extraction ──
 def extract_tar(tar_path, dest_dir):
     with tarfile.open(tar_path, "r:gz") as tar:
         try:
@@ -548,7 +989,6 @@ def find_binary(root_dir, name):
     return None
 
 
-# ── Engine install ──
 def install_engine(dry_run=False):
     BIN_DIR.mkdir(parents=True, exist_ok=True)
     if ENGINE_BIN.exists():
@@ -577,171 +1017,15 @@ def install_engine(dry_run=False):
     success("Engine installed.")
 
 
-# ── Daemon spawner ──
 def write_daemon_spawner():
     DAEMON_FILE.write_text(DAEMON_SPAWN)
     os.chmod(DAEMON_FILE, 0o755)
 
 
-# ── Config ──
 def write_config():
     CONFIG_FILE.write_text(json.dumps(CONFIG_JSON, indent=2))
 
 
-# ── Skills ──
-def do_skills(subcmd="list", name=""):
-    """Manage skills: list, add, remove, show, install."""
-    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-
-    if subcmd == "list":
-        header("Available Skills")
-        skill_files = sorted(SKILLS_DIR.glob("*.json"))
-        if not skill_files:
-            warn("No skills installed. Run 'opencode-proxy skills install' to download from claude-skills repo.")
-            return
-        for sf in skill_files:
-            try:
-                skill = json.loads(sf.read_text())
-                desc = skill.get("description", "")
-                # Truncate long descriptions
-                if len(desc) > 60:
-                    desc = desc[:57] + "..."
-                print(f"  {GREEN}{skill.get('name', sf.stem)}{NC}  {CYAN}[{skill.get('category', '?')}] {NC}{desc}")
-            except Exception:
-                print(f"  {YELLOW}{sf.stem}{NC}  (invalid skill file)")
-        info(f"\nTotal: {len(skill_files)} skills")
-        info(f"Use: opencode-proxy skills show <name>  |  opencode-proxy skills add <name>")
-
-    elif subcmd == "install":
-        header("Install Skills from claude-skills repo")
-        write_skills()
-
-    elif subcmd == "show":
-        if not name:
-            error("Usage: opencode-proxy skills show <name>")
-            return
-        skill_file = SKILLS_DIR / f"{name}.json"
-        if not skill_file.exists():
-            error(f"Skill '{name}' not found. Run 'opencode-proxy skills list' to see available skills.")
-            return
-        skill = json.loads(skill_file.read_text())
-        header(f"Skill: {skill.get('name', name)}")
-        info(f"Category : {skill.get('category', '?')}")
-        info(f"Source   : {skill.get('source', 'custom')}")
-        info(f"Description: {skill.get('description', '')}")
-        print(f"\n{MAGENTA}Skill Content (SKILL.md):{NC}")
-        raw = skill.get("raw", "")
-        if raw:
-            # Print first 2000 chars to avoid flooding
-            if len(raw) > 2000:
-                print(raw[:2000])
-                print(f"\n{YELLOW}... (truncated, full content in {skill_file}){NC}")
-            else:
-                print(raw)
-        else:
-            print(skill.get("system_prompt", "(no content)"))
-        info(f"\nTo use this skill in OpenCode, add the system prompt to your model configuration.")
-        info(f"Skill file: {skill_file}")
-
-    elif subcmd == "add":
-        if not name:
-            error("Usage: opencode-proxy skills add <name>")
-            return
-        skill_file = SKILLS_DIR / f"{name}.json"
-        if skill_file.exists():
-            warn(f"Skill '{name}' already exists.")
-            return
-        desc = input("Enter skill description: ").strip()
-        category = input("Enter skill category (e.g. development, design, utilities): ").strip()
-        system_prompt = input("Enter system prompt for this skill: ").strip()
-        skill = {
-            "name": name,
-            "category": category or "custom",
-            "description": desc or f"Custom skill: {name}",
-            "system_prompt": system_prompt or f"You are an expert in {name}.",
-            "raw": system_prompt or f"You are an expert in {name}.",
-            "source": "custom",
-        }
-        skill_file.write_text(json.dumps(skill, indent=2))
-        success(f"Skill '{name}' created at {skill_file}")
-
-    elif subcmd == "remove":
-        if not name:
-            error("Usage: opencode-proxy skills remove <name>")
-            return
-        skill_file = SKILLS_DIR / f"{name}.json"
-        if not skill_file.exists():
-            error(f"Skill '{name}' not found.")
-            return
-        skill_file.unlink()
-        success(f"Removed skill '{name}'")
-
-    else:
-        error(f"Unknown skills subcommand: {subcmd}")
-        info("Usage: opencode-proxy skills {list|install|show|add|remove} [name]")
-
-
-def do_models(subcmd="list"):
-    """Detect and rank free models from the gateway."""
-    header("OpenCode Free Models")
-
-    try:
-        data = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=5).read().decode())
-    except Exception as e:
-        error(f"Cannot reach proxy at {API_URL}/healthz — is the proxy running? ({e})")
-        info("Start it with: opencode-proxy start")
-        return
-
-    models = data.get("models", {})
-    total = models.get("total", 0)
-    exposed = models.get("exposed", 0)
-
-    if subcmd == "list":
-        info(f"Total upstream: {total}  |  Exposed free: {exposed}")
-        print()
-        # Known model info for ranking
-        model_info = {
-            "deepseek-v4.1-flash-free": {"use": "Code, algorithms, refactoring", "ctx": "128K", "rank": 1},
-            "crouton-alpha-free": {"use": "Massive context, multimodal docs", "ctx": "1M", "rank": 2},
-            "nemotron-3.5-super-vl-free": {"use": "Vision-language tasks", "ctx": "1M", "rank": 3},
-            "beam-free": {"use": "Step-by-step logic", "ctx": "1M", "rank": 4},
-            "pulse-alpha-free": {"use": "Multimodal input", "ctx": "1M", "rank": 5},
-            "big-pickle": {"use": "Multi-step reasoning, planning", "ctx": "200K", "rank": 6},
-            "nemotron-3.5-lightning-free": {"use": "Low-latency scripts, commands", "ctx": "262K", "rank": 7},
-            "glm-5.3-flash-free": {"use": "General knowledge", "ctx": "128K", "rank": 8},
-            "flint-40b-free": {"use": "Open-weight foundation", "ctx": "128K", "rank": 9},
-            "mimo-v2.6-flash-free": {"use": "Compact quick assistant", "ctx": "128K", "rank": 10},
-        }
-        # Sort by rank
-        sorted_models = sorted(model_info.items(), key=lambda x: x[1]["rank"])
-        print(f"  {BOLD}{'Model':<35} {'Context':<10} {'Best For'}{NC}")
-        print(f"  {BOLD}{'-'*35} {'-'*10} {'-'*40}{NC}")
-        for mname, minfo in sorted_models:
-            mark = " ★" if minfo["rank"] <= 3 else ""
-            print(f"  {GREEN}{mname:<35}{NC} {BLUE}{minfo['ctx']:<10}{NC} {minfo['use']}{mark}")
-        print(f"\n{CYAN}★ = Top 3 recommended free models{NC}")
-        info("Use a model in OpenCode: opencode-unlimited-proxy/<model-id>")
-
-    elif subcmd == "best":
-        best = [
-            ("deepseek-v4.1-flash-free", "Code, algorithms, refactoring", "128K"),
-            ("crouton-alpha-free", "Massive context, multimodal docs", "1M"),
-            ("nemotron-3.5-super-vl-free", "Vision-language tasks", "1M"),
-        ]
-        header("Top 3 Free Models")
-        for i, (mname, use, ctx) in enumerate(best, 1):
-            print(f"  {BOLD}{i}. {mname}{NC}")
-            print(f"     Use: {use}  |  Context: {ctx}")
-            print(f"     In OpenCode: opencode-unlimited-proxy/{mname}")
-            print()
-        info("These are the highest-quality free-tier models detected from OpenCode's catalog.")
-
-    else:
-        error(f"Unknown models subcommand: {subcmd}")
-        info("Usage: opencode-proxy models {list|best}")
-
-
-# ── Manager CLI ──
 def write_manager():
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     MANAGER_FILE.write_text(MANAGER_SH)
@@ -811,6 +1095,7 @@ case "$1" in
 esac
 """
 
+
 def write_unlimited_launcher():
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     OPENCODE_UNLIMITED.write_text(UNLIMITED_SH)
@@ -833,13 +1118,11 @@ def install_opencode_cli(dry_run=False):
     env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
 
-    # Validate grun availability on Termux
     if env == "termux":
         if not which("grun"):
             warn("grun not found — OpenCode CLI won't run on Termux without glibc-runner")
             warn("Install with: pkg install glibc-repo glibc-runner")
 
-    # Always (re)write the wrapper based on current environment detection
     if env == "termux":
         OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
     else:
@@ -875,14 +1158,12 @@ exec "{OPENCODE_BIN}" "$@"
     success("OpenCode CLI installed.")
 
 
-# ── OpenCode config ──
 def write_opencode_config():
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     if not OPENCODE_JSONC.exists():
         OPENCODE_JSONC.write_text(OPENCODE_JSONC_CONTENT)
 
 
-# ── PATH ──
 def ensure_path():
     path_str = str(LOCAL_BIN)
     if path_str not in os.environ.get("PATH", ""):
@@ -897,7 +1178,6 @@ def ensure_path():
         BASHRC.write_text(line + "\n")
 
 
-# ── PID / health ──
 def get_pid():
     if PID_FILE.exists():
         pid = PID_FILE.read_text().strip()
@@ -927,7 +1207,6 @@ def health_ok():
         return False
 
 
-# ── Daemon control ──
 def start_daemon(dry_run=False):
     env = detect_env()
     pid = get_pid()
@@ -940,7 +1219,6 @@ def start_daemon(dry_run=False):
         info("[dry-run] Would start opencode2api daemon")
         return
 
-    # Fix DNS on linux/proot-distro so WARP can reach Cloudflare
     fix_dns()
 
     info("Starting OpenCode Proxy daemon...")
@@ -1003,7 +1281,6 @@ def restart_daemon(dry_run=False):
     start_daemon(dry_run=dry_run)
 
 
-# ── Status ──
 def status_daemon():
     pid = get_pid()
     if pid:
@@ -1024,7 +1301,6 @@ def status_daemon():
         error("OpenCode Proxy: STOPPED")
 
 
-# ── Test ──
 def test_model(model):
     header(f"Testing Model: {model}")
     info("Sending test prompt...")
@@ -1059,7 +1335,6 @@ def test_model(model):
         error(f"Test failed: {e}")
 
 
-# ── Logs ──
 def show_logs():
     header("Proxy Logs")
     if LOG_FILE.exists():
@@ -1068,7 +1343,6 @@ def show_logs():
         warn("No log file found.")
 
 
-# ── Update ──
 def do_update():
     header("Updating setup.py")
     try:
@@ -1082,12 +1356,12 @@ def do_update():
         error(f"Update failed: {e}")
 
 
-# ── Uninstall ──
 def do_uninstall():
     header("Uninstalling OpenCode UNLIMITED")
     stop_daemon()
     for p in [PID_FILE, LOG_FILE, CONFIG_FILE, DAEMON_FILE, ENGINE_BIN,
-              OPENCODE_BIN, OPENCODE_WRAPPER, MANAGER_FILE, OPENCODE_JSONC]:
+              OPENCODE_BIN, OPENCODE_WRAPPER, MANAGER_FILE, OPENCODE_JSONC,
+              OPENCODE_UNLIMITED]:
         try:
             if p.exists():
                 p.unlink()
@@ -1105,13 +1379,12 @@ def do_uninstall():
     success("Uninstall complete.")
 
 
-# ── Backup ──
 def do_backup():
     header("Backup")
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     archive = BACKUP_DIR / f"opencode-backup-{stamp}.tar.gz"
-    items = [CONFIG_FILE, OPENCODE_JSONC, BASE_DIR / "setup.py"]
+    items = [CONFIG_FILE, OPENCODE_JSONC, BASE_DIR / "setup.py", SKILLS_DIR]
     with tarfile.open(archive, "w:gz") as tar:
         for item in items:
             if item.exists():
@@ -1119,11 +1392,9 @@ def do_backup():
     success(f"Backup saved to {archive}")
 
 
-# ── Restore ──
 def do_restore(archive_path=""):
     header("Restore")
     if not archive_path:
-        # Find latest backup
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         backups = sorted(BACKUP_DIR.glob("*.tar.gz"))
         if not backups:
@@ -1143,7 +1414,6 @@ def do_restore(archive_path=""):
     info("Run 'opencode-proxy restart' to apply.")
 
 
-# ── Watchdog ──
 def do_watchdog():
     header("Watchdog")
     info("Monitoring proxy... (Ctrl+C to stop)")
@@ -1159,7 +1429,6 @@ def do_watchdog():
         info("Watchdog stopped.")
 
 
-# ── Version check ──
 def do_version():
     header("Version Info")
     info(f"setup.py: OpenCode UNLIMITED")
@@ -1169,7 +1438,6 @@ def do_version():
     info(f"Env     : {detect_env()}")
 
 
-# ── Config validation ──
 def do_validate():
     header("Config Validation")
     ok = True
@@ -1198,7 +1466,6 @@ def do_validate():
     return ok
 
 
-# ── Dry-run install ──
 def do_install_dry_run():
     header("Dry-Run Install")
     check_arch()
@@ -1210,13 +1477,10 @@ def do_install_dry_run():
     success("Dry-run complete — nothing was changed.")
 
 
-# ── Main install ──
 def do_install():
     check_arch()
     header("OpenCode UNLIMITED Setup")
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    # Always copy the latest setup.py to BASE_DIR so opencode-proxy
-    # always has the newest version (with skills/models commands).
     try:
         urllib.request.urlretrieve(SETUP_URL, BASE_DIR / "setup.py")
     except Exception:
@@ -1235,18 +1499,22 @@ def do_install():
     success("Run 'opencode-unlimited' to start gateway + CLI together.")
     info("Or use 'opencode-proxy start' then 'opencode' separately.")
     info("Manage: 'opencode-unlimited {start|stop|restart|status}'")
-    info("Skills:  'opencode-proxy skills {list|install|show|add|remove}'")
+    info("Skills:  'opencode-proxy skills {list|install|sync|search|categories|show|add|remove|apply-skill}'")
     info("Models:  'opencode-proxy models {list|best}'")
+    info("Model:   'opencode-proxy model <name>'")
+    info("Config:  'opencode-proxy config'")
+    info("Doctor:  'opencode-proxy doctor'")
 
 
-# ── CLI ──
 def main():
     ap = argparse.ArgumentParser(description="OpenCode UNLIMITED all-in-one setup")
     ap.add_argument("action", nargs="?",
                     choices=["install", "start", "stop", "restart", "status",
-                             "test", "logs", "update", "uninstall", "backup",
-                             "restore", "watchdog", "version", "validate",
-                             "dry-run", "skills", "models"],
+                             "test", "bench", "logs", "update", "uninstall",
+                             "backup", "restore", "watchdog", "version",
+                             "validate", "dry-run", "skills", "models",
+                             "model", "config", "doctor", "sync",
+                             "apply-skill"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -1264,6 +1532,8 @@ def main():
         status_daemon()
     elif args.action == "test":
         test_model(args.model)
+    elif args.action == "bench":
+        do_bench(args.model)
     elif args.action == "logs":
         show_logs()
     elif args.action == "update":
@@ -1286,6 +1556,16 @@ def main():
         do_skills(args.model, args.skill_name)
     elif args.action == "models":
         do_models(args.model)
+    elif args.action == "model":
+        do_model(args.model)
+    elif args.action == "config":
+        do_config()
+    elif args.action == "doctor":
+        do_doctor()
+    elif args.action == "sync":
+        do_sync()
+    elif args.action == "apply-skill":
+        do_skills("apply-skill", args.skill_name)
 
 
 if __name__ == "__main__":

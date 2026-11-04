@@ -148,59 +148,126 @@ CONFIG_JSON = {
     }
 }
 
-# ── Built-in Skills ──
-BUILTIN_SKILLS = [
-    {
-        "name": "web-design",
-        "category": "design",
-        "description": "Expert web design — UI/UX, color theory, typography, responsive layouts",
-        "system_prompt": "You are an expert web designer. You specialize in modern UI/UX design, color theory, typography, responsive layouts, and accessibility. You create clean, beautiful, user-centered web interfaces using HTML/CSS/JS and modern frameworks like Tailwind, React, Vue, or Svelte. Always prioritize visual hierarchy, whitespace, mobile-first design, and WCAG accessibility.",
-    },
-    {
-        "name": "frontend-dev",
-        "category": "development",
-        "description": "Frontend development — React, Vue, Angular, Svelte, TypeScript, modern JS",
-        "system_prompt": "You are an expert frontend developer. You build modern web applications using React, Vue, Angular, Svelte, or plain HTML/CSS/JS with TypeScript. You follow best practices for component architecture, state management, hooks, performance optimization, and accessible markup. You write clean, maintainable, production-ready code.",
-    },
-    {
-        "name": "backend-dev",
-        "category": "development",
-        "description": "Backend development — Node.js, Python, Go, databases, APIs, authentication",
-        "system_prompt": "You are an expert backend developer. You design and build REST APIs, GraphQL, database schemas (SQL & NoSQL), authentication/authorization, caching, and server architecture. You work with Node.js, Python, Go, PostgreSQL, MongoDB, Redis, and cloud platforms. You prioritize security, scalability, and performance.",
-    },
-    {
-        "name": "fullstack-dev",
-        "category": "development",
-        "description": "Full-stack development — end-to-end web applications, deployment, DevOps",
-        "system_prompt": "You are an expert full-stack developer. You build complete web applications from frontend to backend, including deployment, CI/CD, Docker, and cloud infrastructure. You connect frontend UIs with backend APIs, manage databases, handle auth, and deploy to production. You write end-to-end features and debug across the stack.",
-    },
-    {
-        "name": "debugging",
-        "category": "utilities",
-        "description": "Debugging & troubleshooting — find and fix bugs fast in any language",
-        "system_prompt": "You are an expert debugger. You analyze error messages, stack traces, and code to find root causes quickly. You work in any language (JS, Python, Go, Rust, etc.) and provide step-by-step fixes, explain why bugs happen, and suggest prevention strategies. You reproduce issues, isolate variables, and verify fixes.",
-    },
-    {
-        "name": "code-review",
-        "category": "utilities",
-        "description": "Code review — security, performance, best practices, maintainability",
-        "system_prompt": "You are an expert code reviewer. You analyze code for security vulnerabilities, performance bottlenecks, code smells, and maintainability issues. You suggest concrete improvements, refactorings, and best practices for the language and framework being used. You write constructive, actionable feedback.",
-    },
-    {
-        "name": "api-design",
-        "category": "development",
-        "description": "API design — REST, GraphQL, OpenAPI, versioning, authentication",
-        "system_prompt": "You are an API design expert. You design RESTful APIs, GraphQL schemas, and OpenAPI/Swagger specifications. You handle versioning, authentication (JWT, OAuth, API keys), rate limiting, pagination, error handling, and documentation. You create developer-friendly, well-documented APIs.",
-    },
-    {
-        "name": "sql-database",
-        "category": "development",
-        "description": "SQL database design — schemas, queries, optimization, migrations",
-        "system_prompt": "You are a database expert. You design SQL schemas, write optimized queries, create indexes, plan migrations, and normalize/denormalize data. You work with PostgreSQL, MySQL, SQLite, and explain query execution plans. You prioritize data integrity, performance, and scalability.",
-    },
-]
+# ── Skills Repo (alirezarezvani/claude-skills) ──
+SKILLS_REPO_API = "https://api.github.com/repos/alirezarezvani/claude-skills/git/trees/main?recursive=1"
+SKILLS_RAW_BASE = "https://raw.githubusercontent.com/alirezarezvani/claude-skills/main/"
 
-SKILLS_JSON = json.dumps(BUILTIN_SKILLS, indent=2)
+
+def parse_skill_md(content: str) -> dict:
+    """Parse SKILL.md frontmatter + body into a skill dict."""
+    skill = {
+        "name": "",
+        "category": "custom",
+        "description": "",
+        "system_prompt": "",
+        "raw": content,
+    }
+    # Extract YAML frontmatter
+    if content.startswith("---\n"):
+        end = content.find("\n---\n", 4)
+        if end != -1:
+            fm = content[4:end]
+            body = content[end + 5:]
+            skill["raw"] = body.strip()
+            for line in fm.splitlines():
+                if ":" in line:
+                    key, _, val = line.partition(":")
+                    key = key.strip()
+                    val = val.strip().strip('"').strip("'")
+                    if key == "name":
+                        skill["name"] = val
+                    elif key == "description":
+                        skill["description"] = val
+                    elif key == "license":
+                        skill["license"] = val
+            # category from metadata or default
+            skill["category"] = "claude-skills"
+    else:
+        skill["raw"] = content.strip()
+    return skill
+
+
+def fetch_all_skills() -> list:
+    """Fetch all SKILL.md files from the claude-skills repo via the Git Trees API."""
+    try:
+        req = urllib.request.Request(
+            SKILLS_REPO_API,
+            headers={"User-Agent": "nullxOpenS/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+    except Exception as e:
+        error(f"Failed to fetch skills tree from GitHub: {e}")
+        return []
+
+    tree = data.get("tree", [])
+    skills = []
+    for item in tree:
+        path = item.get("path", "")
+        if item.get("type") == "blob" and path.endswith("SKILL.md"):
+            # Derive category from path: engineering/agent-memory/skills/agent-memory/SKILL.md
+            parts = path.split("/")
+            if len(parts) >= 4:
+                category = parts[0]  # e.g. engineering, marketing
+                skill_name = parts[-2]  # e.g. agent-memory
+            else:
+                category = "claude-skills"
+                skill_name = Path(path).stem
+            skills.append({
+                "path": path,
+                "name": skill_name,
+                "category": category,
+                "download_url": f"{SKILLS_RAW_BASE}{path}",
+            })
+    return skills
+
+
+def download_skill(skill_info: dict) -> dict | None:
+    """Download and parse a single SKILL.md from the repo."""
+    try:
+        with urllib.request.urlopen(skill_info["download_url"], timeout=30) as resp:
+            content = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:
+        warn(f"Failed to download {skill_info['name']}: {e}")
+        return None
+    skill = parse_skill_md(content)
+    skill["source"] = skill_info["path"]
+    skill["category"] = skill_info["category"]
+    if not skill["name"]:
+        skill["name"] = skill_info["name"]
+    return skill
+
+
+def write_skills(dry_run=False):
+    """Download skills from alirezarezvani/claude-skills into SKILLS_DIR."""
+    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    if dry_run:
+        info("[dry-run] Would download skills from alirezarezvani/claude-skills")
+        return
+
+    header("Downloading Skills from claude-skills repo")
+    info("Fetching skill tree from GitHub...")
+    skills = fetch_all_skills()
+    if not skills:
+        warn("No skills found or GitHub API unavailable.")
+        return
+
+    info(f"Found {len(skills)} skills in repo.")
+    count = 0
+    for skill_info in skills:
+        skill_file = SKILLS_DIR / f"{skill_info['name']}.json"
+        if skill_file.exists():
+            continue
+        skill = download_skill(skill_info)
+        if not skill or not skill["name"]:
+            continue
+        skill_file.write_text(json.dumps(skill, indent=2))
+        count += 1
+    if count > 0:
+        success(f"Installed {count} skills from claude-skills repo.")
+    else:
+        info("All skills already installed.")
+
 
 DAEMON_SPAWN = r"""#!/usr/bin/env python3
 import os
@@ -539,18 +606,23 @@ def do_skills(subcmd="list", name=""):
         header("Available Skills")
         skill_files = sorted(SKILLS_DIR.glob("*.json"))
         if not skill_files:
-            warn("No skills installed. Run 'opencode-proxy skills install' to add built-in skills.")
+            warn("No skills installed. Run 'opencode-proxy skills install' to download from claude-skills repo.")
             return
         for sf in skill_files:
             try:
                 skill = json.loads(sf.read_text())
-                print(f"  {GREEN}{skill.get('name', sf.stem)}{NC}  {CYAN}[{skill.get('category', '?')}] {NC}{skill.get('description', '')}")
+                desc = skill.get("description", "")
+                # Truncate long descriptions
+                if len(desc) > 60:
+                    desc = desc[:57] + "..."
+                print(f"  {GREEN}{skill.get('name', sf.stem)}{NC}  {CYAN}[{skill.get('category', '?')}] {NC}{desc}")
             except Exception:
                 print(f"  {YELLOW}{sf.stem}{NC}  (invalid skill file)")
-        info(f"\nUse: opencode-proxy skills show <name>  |  opencode-proxy skills add <name>")
+        info(f"\nTotal: {len(skill_files)} skills")
+        info(f"Use: opencode-proxy skills show <name>  |  opencode-proxy skills add <name>")
 
     elif subcmd == "install":
-        header("Install Built-in Skills")
+        header("Install Skills from claude-skills repo")
         write_skills()
 
     elif subcmd == "show":
@@ -564,10 +636,21 @@ def do_skills(subcmd="list", name=""):
         skill = json.loads(skill_file.read_text())
         header(f"Skill: {skill.get('name', name)}")
         info(f"Category : {skill.get('category', '?')}")
+        info(f"Source   : {skill.get('source', 'custom')}")
         info(f"Description: {skill.get('description', '')}")
-        print(f"\n{MAGENTA}System Prompt:{NC}")
-        print(skill.get("system_prompt", ""))
-        info(f"\nTo use this skill in OpenCode, add it to your system prompt or model configuration.")
+        print(f"\n{MAGENTA}Skill Content (SKILL.md):{NC}")
+        raw = skill.get("raw", "")
+        if raw:
+            # Print first 2000 chars to avoid flooding
+            if len(raw) > 2000:
+                print(raw[:2000])
+                print(f"\n{YELLOW}... (truncated, full content in {skill_file}){NC}")
+            else:
+                print(raw)
+        else:
+            print(skill.get("system_prompt", "(no content)"))
+        info(f"\nTo use this skill in OpenCode, add the system prompt to your model configuration.")
+        info(f"Skill file: {skill_file}")
 
     elif subcmd == "add":
         if not name:
@@ -584,7 +667,9 @@ def do_skills(subcmd="list", name=""):
             "name": name,
             "category": category or "custom",
             "description": desc or f"Custom skill: {name}",
-            "system_prompt": system_prompt or f"You are an expert in {name}."
+            "system_prompt": system_prompt or f"You are an expert in {name}.",
+            "raw": system_prompt or f"You are an expert in {name}.",
+            "source": "custom",
         }
         skill_file.write_text(json.dumps(skill, indent=2))
         success(f"Skill '{name}' created at {skill_file}")
@@ -602,7 +687,7 @@ def do_skills(subcmd="list", name=""):
 
     else:
         error(f"Unknown skills subcommand: {subcmd}")
-        info("Usage: opencode-proxy skills {list|add|remove|show|install} [name]")
+        info("Usage: opencode-proxy skills {list|install|show|add|remove} [name]")
 
 
 def do_models(subcmd="list"):

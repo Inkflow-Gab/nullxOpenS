@@ -1215,12 +1215,12 @@ def do_install():
     check_arch()
     header("OpenCode UNLIMITED Setup")
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    setup_py_dest = BASE_DIR / "setup.py"
-    if not setup_py_dest.exists():
-        try:
-            urllib.request.urlretrieve(SETUP_URL, setup_py_dest)
-        except Exception:
-            pass
+    # Always copy the latest setup.py to BASE_DIR so opencode-proxy
+    # always has the newest version (with skills/models commands).
+    try:
+        urllib.request.urlretrieve(SETUP_URL, BASE_DIR / "setup.py")
+    except Exception:
+        pass
     install_packages()
     install_engine()
     write_daemon_spawner()

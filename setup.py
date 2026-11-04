@@ -492,9 +492,26 @@ def write_unlimited_launcher():
 
 
 # ── OpenCode CLI ──
+def validate_opencode_bin():
+    """Return True if opencode-bin exists, is non-empty, and is executable."""
+    if not OPENCODE_BIN.exists():
+        return False
+    if OPENCODE_BIN.stat().st_size == 0:
+        return False
+    if not os.access(OPENCODE_BIN, os.X_OK):
+        return False
+    return True
+
+
 def install_opencode_cli(dry_run=False):
     env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+
+    # Validate grun availability on Termux
+    if env == "termux":
+        if not which("grun"):
+            warn("grun not found — OpenCode CLI won't run on Termux without glibc-runner")
+            warn("Install with: pkg install glibc-repo glibc-runner")
 
     # Always (re)write the wrapper based on current environment detection
     if env == "termux":
@@ -505,7 +522,7 @@ exec "{OPENCODE_BIN}" "$@"
 """)
     os.chmod(OPENCODE_WRAPPER, 0o755)
 
-    if OPENCODE_BIN.exists():
+    if validate_opencode_bin():
         info("OpenCode CLI already installed — skipping download.")
         return
 

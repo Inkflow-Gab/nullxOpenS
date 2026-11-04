@@ -560,6 +560,19 @@ def do_model(name=""):
     info("Restart OpenCode to apply: opencode-unlimited restart")
 
 
+def do_continue():
+    """Resume the previous OpenCode session (opencode --continue)."""
+    header("Resuming OpenCode Session")
+    if not OPENCODE_WRAPPER.exists():
+        error("OpenCode wrapper not found. Run: opencode-proxy install")
+        return
+    info("Running: opencode --continue")
+    try:
+        run(["bash", str(OPENCODE_WRAPPER), "--continue"], check=False)
+    except KeyboardInterrupt:
+        info("Session ended.")
+
+
 def do_bench(model=""):
     """Benchmark/test a model."""
     if not model:
@@ -772,11 +785,13 @@ case "$1" in
     sync)    python3 "$SETUP" sync ;;
     apply-skill) python3 "$SETUP" skills apply-skill "${2:-}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue}"; exit 1 ;;
 esac
 """
 
 OPENCODE_WRAPPER_SH = """#!/usr/bin/env bash
+# OpenCode CLI wrapper — passes all flags through to opencode-bin.
+# Supports: opencode --continue  (resume previous session)
 exec grun "$HOME/.local/bin/opencode-bin" "$@"
 """
 
@@ -1127,6 +1142,8 @@ def install_opencode_cli(dry_run=False):
         OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
     else:
         OPENCODE_WRAPPER.write_text(f"""#!/usr/bin/env bash
+# OpenCode CLI wrapper — passes all flags through to opencode-bin.
+# Supports: opencode --continue  (resume previous session)
 exec "{OPENCODE_BIN}" "$@"
 """)
     os.chmod(OPENCODE_WRAPPER, 0o755)
@@ -1514,7 +1531,7 @@ def main():
                              "backup", "restore", "watchdog", "version",
                              "validate", "dry-run", "skills", "models",
                              "model", "config", "doctor", "sync",
-                             "apply-skill"],
+                             "apply-skill", "continue"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -1566,6 +1583,8 @@ def main():
         do_sync()
     elif args.action == "apply-skill":
         do_skills("apply-skill", args.skill_name)
+    elif args.action == "continue":
+        do_continue()
 
 
 if __name__ == "__main__":

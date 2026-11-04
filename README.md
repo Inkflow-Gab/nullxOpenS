@@ -86,6 +86,7 @@ opencode
 | `opencode-proxy config` | Show current OpenCode configuration |
 | `opencode-proxy doctor` | Run system diagnostics |
 | `opencode-proxy sync` | Re-sync skills from claude-skills repo |
+| `opencode-proxy continue` | Resume previous OpenCode session (`opencode --continue`) |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited stop` | Stop proxy + CLI |
@@ -271,6 +272,24 @@ opencode-proxy doctor
 This verifies Python, architecture, packages, binaries, configs, skills, and gateway connectivity — and gives you actionable fix suggestions.
 
 ---
+
+## Resume a Session (--continue) 🔄
+
+OpenCode UNLIMITED supports resuming your previous OpenCode conversation with the `--continue` flag:
+
+```bash
+opencode --continue
+```
+
+This forwards `--continue` straight to the OpenCode CLI (`opencode-bin`), so it picks up right where your last session left off.
+
+You can also trigger it through the proxy manager:
+
+```bash
+opencode-proxy continue
+```
+
+Both are equivalent — `opencode --continue` is the direct form, `opencode-proxy continue` goes through the manager wrapper.
 
 ## Credits 🏅
 

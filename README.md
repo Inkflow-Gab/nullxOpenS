@@ -85,7 +85,7 @@ opencode
 | `opencode-unlimited restart` | Restart proxy + CLI |
 | `opencode-unlimited status` | Check both proxy and CLI |
 | `opencode-proxy skills list` | List installed skills |
-| `opencode-proxy skills install` | Install built-in skills (web-design, frontend-dev, backend-dev, fullstack-dev, debugging, code-review, api-design, sql-database) |
+| `opencode-proxy skills install` | Download skills from claude-skills repo (animation shown) |
 | `opencode-proxy skills show <name>` | Show skill details & system prompt |
 | `opencode-proxy skills add <name>` | Create a custom skill |
 | `opencode-proxy skills remove <name>` | Remove a skill |
@@ -130,34 +130,97 @@ Android Device (Termux / Ubuntu proot-distro)
 
 ## Skills
 
-OpenCode UNLIMITED includes built-in **skills** — pre-configured system prompts for specific tasks. Install them with:
+OpenCode UNLIMITED downloads skills from **alirezarezvani/claude-skills** — 400+ production-ready skills across 20 domains (engineering, marketing, c-level, business, compliance, finance, productivity, research, and more). Each skill includes a system prompt that tells OpenCode how to behave for a specific task.
+
+### Install skills
 
 ```bash
 opencode-proxy skills install
 ```
 
-Then view or add them:
+This shows a live progress bar while downloading skills from GitHub.
+
+### List installed skills
 
 ```bash
 opencode-proxy skills list
-opencode-proxy skills show web-design
-opencode-proxy skills add my-skill
 ```
 
-### Built-in Skills
+### Show a skill's content
 
-| Skill | Category | Description |
-|-------|----------|-------------|
-| `web-design` | design | UI/UX, color theory, typography, responsive layouts |
-| `frontend-dev` | development | React, Vue, Angular, Svelte, TypeScript, modern JS |
-| `backend-dev` | development | Node.js, Python, Go, databases, APIs, authentication |
-| `fullstack-dev` | development | End-to-end web apps, deployment, DevOps |
-| `debugging` | utilities | Find and fix bugs fast in any language |
-| `code-review` | utilities | Security, performance, best practices, maintainability |
-| `api-design` | development | REST, GraphQL, OpenAPI, versioning, auth |
-| `sql-database` | development | Schemas, queries, optimization, migrations |
+```bash
+opencode-proxy skills show agent-memory
+```
 
-Use a skill's system prompt in OpenCode to get specialized behavior for that task.
+### Create a custom skill
+
+```bash
+opencode-proxy skills add my-web-skill
+# Then enter: description, category, and system prompt
+```
+
+### Remove a skill
+
+```bash
+opencode-proxy skills remove my-web-skill
+```
+
+---
+
+## Using Skills Inside OpenCode
+
+Skills are **system prompts** — you paste them into OpenCode to change how it behaves. Here's how:
+
+### Step 1: Get a skill's system prompt
+
+```bash
+opencode-proxy skills show frontend-dev
+```
+
+Copy the text under `System Prompt:` (everything after `Content:`).
+
+### Step 2: Start OpenCode
+
+```bash
+opencode
+```
+
+### Step 3: Use the skill inside OpenCode TUI
+
+Once OpenCode is running, you can type commands like:
+
+```
+/skill frontend-dev
+/skill agent-memory
+/skill code-review
+```
+
+Or use the skill's system prompt as your first message:
+
+> "You are an expert frontend developer. You build modern web applications using React..."
+
+**Common workflows:**
+
+| Task | Skill to use | What to type in OpenCode |
+|------|-------------|--------------------------|
+| Design a website | `web-design` | `/skill web-design` then describe your site |
+| Debug code | `debugging` | `/skill debugging` then paste your error |
+| Review code | `code-review` | `/skill code-review` then paste your code |
+| Build an API | `api-design` | `/skill api-design` then describe your endpoints |
+| SQL queries | `sql-database` | `/skill sql-database` then describe your data |
+
+### Step 4: Model detection (pick the best free model)
+
+```bash
+opencode-proxy models best
+```
+
+Then use that model in OpenCode:
+
+```bash
+/skill web-design
+# OpenCode now acts as a web design expert using the best free model
+```
 
 ## Model Detection
 

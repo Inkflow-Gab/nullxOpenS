@@ -41,6 +41,13 @@ LOCAL_BIN="$HOME/.local/bin"
 CONFIG_DIR="$HOME/.config/opencode"
 mkdir -p "$BIN_DIR" "$LOCAL_BIN" "$CONFIG_DIR"
 
+# --- copy setup.py into BASE_DIR so opencode-proxy can find it ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "$SCRIPT_DIR/setup.py" ]; then
+    cp "$SCRIPT_DIR/setup.py" "$BASE_DIR/setup.py"
+    chmod +x "$BASE_DIR/setup.py"
+fi
+
 # --- download opencode2api engine ---
 ENGINE_VER="v1.4.6"
 ENGINE_URL="https://github.com/jasonxu114514/opencode2api/releases/download/${ENGINE_VER}/opencode2api_${ENGINE_VER}_linux_arm64.tar.gz"
@@ -116,9 +123,18 @@ if [ ! -f "$LOCAL_BIN/opencode-bin" ]; then
     rm -f "$TMP_CLI"
 fi
 
-cat > "$LOCAL_BIN/opencode" << 'SH'
-#!/data/data/com.termux/files/usr/bin/bash
-exec /data/data/com.termux/files/usr/bin/grun "$HOME/.local/bin/opencode-bin" "$@"
+# Detect environment for wrapper
+if command -v pkg >/dev/null 2>&1 && [ -d "/data/data/com.termux" ]; then
+    WRAPPER_SHELL="/data/data/com.termux/files/usr/bin/bash"
+    WRAPPER_EXEC="exec /data/data/com.termux/files/usr/bin/grun \"$HOME/.local/bin/opencode-bin\" \"$@\""
+else
+    WRAPPER_SHELL="/usr/bin/env bash"
+    WRAPPER_EXEC="exec \"$HOME/.local/bin/opencode-bin\" \"$@\""
+fi
+
+cat > "$LOCAL_BIN/opencode" << SH
+#!/$WRAPPER_SHELL
+$WRAPPER_EXEC
 SH
 chmod +x "$LOCAL_BIN/opencode"
 

@@ -368,6 +368,13 @@ def write_manager():
 def install_opencode_cli():
     env = detect_env()
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+
+    # Always ensure setup.py is in BASE_DIR so opencode-proxy can find it
+    try:
+        shutil.copy2(Path(__file__).resolve(), BASE_DIR / "setup.py")
+    except Exception:
+        pass
+
     if OPENCODE_BIN.exists():
         cprint("OpenCode CLI already installed — skipping", BLUE)
         return
@@ -386,13 +393,14 @@ def install_opencode_cli():
     os.chmod(OPENCODE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
 
-    # grun wrapper only exists on Termux; on Linux we still drop the binary
-    # but the wrapper will only work where grun is available.
+    # Write the opencode wrapper — grun only on Termux, direct exec on Linux
     if env == "termux":
         OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
-        os.chmod(OPENCODE_WRAPPER, 0o755)
     else:
-        cprint("Note: OpenCode CLI via grun requires Termux. Binary saved to ~/.local/bin/opencode-bin", YELLOW)
+        OPENCODE_WRAPPER.write_text(f"""#!/usr/bin/env bash
+exec "{OPENCODE_BIN}" "$@"
+""")
+    os.chmod(OPENCODE_WRAPPER, 0o755)
 
 
 def write_opencode_config():

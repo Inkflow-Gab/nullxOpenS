@@ -264,6 +264,46 @@ def detect_env():
     return "linux"
 
 
+def fix_dns():
+    """Ensure /etc/resolv.conf has a working nameserver on linux/proot-distro.
+
+    Inside proot-distro ubuntu, /etc/resolv.conf often points to [::1]:53 or
+    127.0.0.1:53 which WARP's userspace DNS can't use. We back up the original
+    and write a public nameserver so Cloudflare registration works.
+    Only runs on linux (Termux uses termux-chroot which handles DNS).
+    """
+    if detect_env() != "linux":
+        return
+    resolv = Path("/etc/resolv.conf")
+    if not resolv.exists():
+        return
+    try:
+        content = resolv.read_text()
+    except Exception:
+        return
+    # If only localhost nameservers, replace with a public one
+    nameservers = []
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("nameserver"):
+            parts = line.split()
+            if len(parts) == 2:
+                nameservers.append(parts[1])
+    bad = {"127.0.0.1", "::1", "0.0.0.0"}
+    if nameservers and all(ns in bad for ns in nameservers):
+        backup = Path("/etc/resolv.conf.opencode-unlimited.bak")
+        if not backup.exists():
+            try:
+                shutil.copy2(resolv, backup)
+            except Exception:
+                pass
+        try:
+            resolv.write_text("nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+            info("Fixed /etc/resolv.conf for WARP DNS (1.1.1.1, 8.8.8.8)")
+        except Exception as e:
+            warn(f"Could not fix /etc/resolv.conf: {e}")
+
+
 # ── Arch check ──
 def check_arch():
     if ARCH not in ("aarch64", "arm64"):
@@ -613,6 +653,9 @@ def start_daemon(dry_run=False):
     if dry_run:
         info("[dry-run] Would start opencode2api daemon")
         return
+
+    # Fix DNS on linux/proot-distro so WARP can reach Cloudflare
+    fix_dns()
 
     info("Starting OpenCode Proxy daemon...")
     pid = os.fork()

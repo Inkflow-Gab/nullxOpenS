@@ -580,24 +580,6 @@ def write_config():
 
 
 # ── Skills ──
-def write_skills(dry_run=False):
-    """Install built-in skills into SKILLS_DIR."""
-    SKILLS_DIR.mkdir(parents=True, exist_ok=True)
-    if dry_run:
-        info(f"[dry-run] Would install {len(BUILTIN_SKILLS)} built-in skills to {SKILLS_DIR}")
-        return
-    count = 0
-    for skill in BUILTIN_SKILLS:
-        skill_file = SKILLS_DIR / f"{skill['name']}.json"
-        if not skill_file.exists():
-            skill_file.write_text(json.dumps(skill, indent=2))
-            count += 1
-    if count > 0:
-        success(f"Installed {count} built-in skills to {SKILLS_DIR}")
-    else:
-        info("All built-in skills already installed.")
-
-
 def do_skills(subcmd="list", name=""):
     """Manage skills: list, add, remove, show, install."""
     SKILLS_DIR.mkdir(parents=True, exist_ok=True)

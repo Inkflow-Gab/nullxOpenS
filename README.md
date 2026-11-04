@@ -53,6 +53,14 @@ python3 setup.py install
 Once installed:
 
 ```bash
+opencode-unlimited start    # starts proxy + launches CLI together
+opencode-unlimited status   # check both proxy and CLI
+opencode-unlimited stop     # stop everything
+```
+
+Or use them separately:
+
+```bash
 opencode-proxy start
 opencode-proxy status
 opencode
@@ -72,6 +80,10 @@ opencode
 | `opencode-proxy test [model]` | Send a test chat request |
 | `opencode-proxy logs` | Stream recent proxy logs |
 | `opencode` | Launch OpenCode CLI TUI |
+| `opencode-unlimited start` | Start proxy + launch CLI together |
+| `opencode-unlimited stop` | Stop proxy + CLI |
+| `opencode-unlimited restart` | Restart proxy + CLI |
+| `opencode-unlimited status` | Check both proxy and CLI |
 
 ---
 

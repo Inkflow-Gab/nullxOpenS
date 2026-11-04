@@ -76,6 +76,7 @@ MANAGER_FILE = LOCAL_BIN / "opencode-proxy"
 ENGINE_BIN = BIN_DIR / "opencode2api"
 OPENCODE_BIN = LOCAL_BIN / "opencode-bin"
 OPENCODE_WRAPPER = LOCAL_BIN / "opencode"
+OPENCODE_UNLIMITED = LOCAL_BIN / "opencode-unlimited"
 OPENCODE_JSONC = CONFIG_DIR / "opencode.jsonc"
 BACKUP_DIR = BASE_DIR / "backups"
 BASHRC = HOME / ".bashrc"
@@ -419,6 +420,75 @@ def write_manager():
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     MANAGER_FILE.write_text(MANAGER_SH)
     os.chmod(MANAGER_FILE, 0o755)
+
+
+# ── Unified launcher ──
+UNLIMITED_SH = """#!/usr/bin/env bash
+# OpenCode UNLIMITED — unified launcher
+# Starts the proxy daemon + OpenCode CLI together as one service.
+BASE_DIR="$HOME/.opencode-proxy"
+LOCAL_BIN="$HOME/.local/bin"
+PROXY="$LOCAL_BIN/opencode-proxy"
+CLI="$LOCAL_BIN/opencode"
+
+wait_for_proxy() {
+    for i in $(seq 1 15); do
+        if curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+case "$1" in
+    start)
+        "$PROXY" start
+        if wait_for_proxy; then
+            exec "$CLI"
+        else
+            echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+            exit 1
+        fi
+        ;;
+    stop)
+        "$PROXY" stop
+        pkill -f "opencode-bin" 2>/dev/null || true
+        ;;
+    restart)
+        "$PROXY" stop
+        pkill -f "opencode-bin" 2>/dev/null || true
+        sleep 1
+        "$PROXY" start
+        if wait_for_proxy; then
+            exec "$CLI"
+        else
+            echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+            exit 1
+        fi
+        ;;
+    status)
+        "$PROXY" status
+        if pgrep -f "opencode-bin" >/dev/null 2>&1; then
+            echo "OpenCode CLI: RUNNING"
+        else
+            echo "OpenCode CLI: STOPPED"
+        fi
+        ;;
+    install)
+        python3 "$BASE_DIR/setup.py" install
+        ;;
+    *)
+        echo "Usage: opencode-unlimited {install|start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+"""
+
+def write_unlimited_launcher():
+    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+    OPENCODE_UNLIMITED.write_text(UNLIMITED_SH)
+    os.chmod(OPENCODE_UNLIMITED, 0o755)
 
 
 # ── OpenCode CLI ──
@@ -810,12 +880,14 @@ def do_install():
     write_daemon_spawner()
     write_config()
     write_manager()
+    write_unlimited_launcher()
     install_opencode_cli()
     write_opencode_config()
     ensure_path()
     header("Setup Complete!")
-    success("Run 'opencode' to start the interactive TUI.")
-    info("Manage gateway with 'opencode-proxy {start|stop|restart|status|test|logs}'.")
+    success("Run 'opencode-unlimited' to start gateway + CLI together.")
+    info("Or use 'opencode-proxy start' then 'opencode' separately.")
+    info("Manage: 'opencode-unlimited {start|stop|restart|status}'")
 
 
 # ── CLI ──

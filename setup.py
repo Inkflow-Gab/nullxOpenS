@@ -698,6 +698,10 @@ def do_doctor():
     gw_healthy = health_ok()
     checks.append(("gateway health", "online" if gw_healthy else "offline", gw_healthy))
 
+    # Thinking mode indicator
+    thinking_mode, thinking_enabled = get_thinking_mode()
+    checks.append(("thinking mode", thinking_indicator(), thinking_enabled or thinking_mode != "none"))
+
     # Print results
     all_ok = True
     for name, status, ok in checks:
@@ -942,19 +946,68 @@ def do_fix_dns():
         error(f"Could not write /etc/resolv.conf: {e}")
 
 
+def get_thinking_mode():
+    """Read current thinking mode from opencode.jsonc."""
+    if not OPENCODE_JSONC.exists():
+        return "none", False
+    try:
+        cfg = json.loads(OPENCODE_JSONC.read_text())
+        thinking = cfg.get("thinking", {})
+        mode = thinking.get("mode", "none")
+        enabled = thinking.get("enabled", mode != "none")
+        return mode, enabled
+    except Exception:
+        return "none", False
+
+
+def thinking_indicator():
+    """Return a visual indicator string for current thinking mode."""
+    mode, enabled = get_thinking_mode()
+    if not enabled or mode == "none":
+        return f"{DIM}○ thinking: off{NC}"
+    if mode == "max":
+        return f"{BOLD}{MAGENTA}● thinking: MAX{NC}"
+    if mode == "high":
+        return f"{BOLD}{RED}▲ thinking: high{NC}"
+    if mode == "medium":
+        return f"{BOLD}{YELLOW}▲ thinking: medium{NC}"
+    if mode == "low":
+        return f"{BOLD}{BLUE}▲ thinking: low{NC}"
+    return f"{DIM}○ thinking: {mode}{NC}"
+
+
 def do_thinking(mode=""):
-    """Set model thinking/reasoning mode (e.g. low, medium, max).
+    """Set model thinking/reasoning mode or show status.
 
     Writes the thinking config into opencode.jsonc so DeepSeek and other
     models use the specified reasoning effort.
+    Usage: opencode-proxy thinking <mode>  (low, medium, max, high, none)
+           opencode-proxy thinking status  (show current mode with indicator)
     """
     if not mode:
         error("Usage: opencode-proxy thinking <mode>")
-        info("Modes: low, medium, max (DeepThink max for DeepSeek)")
+        info("Modes: low, medium, max (DeepThink max for DeepSeek), high, none")
         info("Example: opencode-proxy thinking max")
+        info("         opencode-proxy thinking status")
         return
 
     mode_lower = mode.lower()
+
+    # Handle status subcommand
+    if mode_lower == "status":
+        current_mode, enabled = get_thinking_mode()
+        header("Thinking Mode Status")
+        print(f"\n  {thinking_indicator()}\n")
+        if not enabled or current_mode == "none":
+            info("Thinking is currently disabled.")
+            info("Enable it with: opencode-proxy thinking max")
+        else:
+            info(f"Current thinking mode: {BOLD}{current_mode}{NC}")
+            if current_mode == "max":
+                info("DeepThink/max thinking is active for DeepSeek models.")
+            info("Restart OpenCode to apply changes: opencode-unlimited restart")
+        return
+
     valid_modes = {"low", "medium", "max", "high", "none"}
     if mode_lower not in valid_modes:
         error(f"Invalid thinking mode: {mode}")
@@ -990,8 +1043,10 @@ def do_thinking(mode=""):
 
     OPENCODE_JSONC.write_text(json.dumps(current_config, indent=2))
     success(f"Thinking mode set to: {mode_lower}")
-    info("DeepThink/max thinking enabled for DeepSeek models." if mode_lower == "max" else "")
+    if mode_lower == "max":
+        info("DeepThink/max thinking enabled for DeepSeek models.")
     info("Restart OpenCode to apply: opencode-unlimited restart")
+    info(f"Current status: {thinking_indicator()}")
 
 
 def do_zoom_in():
@@ -1722,6 +1777,7 @@ def do_install():
     info("Fix DNS: 'opencode-proxy fix-dns'  (if WARP/proxy can't connect)")
     info("Zoom:    'opencode-proxy zoom-in' | 'zoom-out' | 'zoom-reset'  (Termux font size)")
     info("Thinking: 'opencode-proxy thinking <mode>'  (low, medium, max — DeepThink for DeepSeek)")
+    info("          'opencode-proxy thinking status'  (show current thinking indicator)")
 
 
 def main():

@@ -362,6 +362,7 @@ opencode-proxy thinking low     # minimal reasoning
 opencode-proxy thinking medium  # balanced reasoning
 opencode-proxy thinking max     # DeepThink max — DeepSeek's deepest reasoning
 opencode-proxy thinking none    # disable thinking
+opencode-proxy thinking status  # show visual thinking indicator
 ```
 
 Then restart OpenCode to apply:
@@ -371,6 +372,16 @@ opencode-unlimited restart
 ```
 
 Valid modes: `low`, `medium`, `max`, `high`, `none`
+
+## Visual Thinking Indicator 🔍
+
+Run `opencode-proxy thinking status` or `opencode-proxy doctor` to see a visual indicator:
+
+- `● thinking: MAX` (magenta) — DeepThink max, DeepSeek's deepest reasoning
+- `▲ thinking: high` (red) — high reasoning effort
+- `▲ thinking: medium` (yellow) — balanced reasoning
+- `▲ thinking: low` (blue) — minimal reasoning
+- `○ thinking: off` (dim) — thinking disabled
 
 This writes the thinking config into `~/.config/opencode/opencode.jsonc` so the model uses the specified reasoning effort on every request.
 

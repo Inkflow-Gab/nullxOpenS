@@ -92,6 +92,7 @@ opencode
 | `opencode-proxy zoom-in` | Increase terminal font size (Termux) |
 | `opencode-proxy zoom-out` | Decrease terminal font size (Termux) |
 | `opencode-proxy zoom-reset` | Reset terminal font size to default |
+| `opencode-proxy thinking <mode>` | Set model thinking mode (low, medium, max) |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited start --continue` | Start proxy + resume previous OpenCode session |
@@ -351,6 +352,27 @@ opencode-proxy zoom-reset # back to default
 ```
 
 These modify `~/.termux/termux.properties` and reload Termux settings automatically.
+
+## Model Thinking 🧠
+
+Set the reasoning/thinking mode for your models (DeepThink max for DeepSeek):
+
+```bash
+opencode-proxy thinking low     # minimal reasoning
+opencode-proxy thinking medium  # balanced reasoning
+opencode-proxy thinking max     # DeepThink max — DeepSeek's deepest reasoning
+opencode-proxy thinking none    # disable thinking
+```
+
+Then restart OpenCode to apply:
+
+```bash
+opencode-unlimited restart
+```
+
+Valid modes: `low`, `medium`, `max`, `high`, `none`
+
+This writes the thinking config into `~/.config/opencode/opencode.jsonc` so the model uses the specified reasoning effort on every request.
 
 ## Credits 🏅
 

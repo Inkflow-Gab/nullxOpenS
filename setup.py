@@ -801,8 +801,9 @@ case "$1" in
     zoom-in) python3 "$SETUP" zoom-in ;;
     zoom-out) python3 "$SETUP" zoom-out ;;
     zoom-reset) python3 "$SETUP" zoom-reset ;;
+    thinking) python3 "$SETUP" thinking "${2:-}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>}"; exit 1 ;;
 esac
 """
 
@@ -939,6 +940,58 @@ def do_fix_dns():
         info("Run 'opencode-proxy restart' to apply.")
     except Exception as e:
         error(f"Could not write /etc/resolv.conf: {e}")
+
+
+def do_thinking(mode=""):
+    """Set model thinking/reasoning mode (e.g. low, medium, max).
+
+    Writes the thinking config into opencode.jsonc so DeepSeek and other
+    models use the specified reasoning effort.
+    """
+    if not mode:
+        error("Usage: opencode-proxy thinking <mode>")
+        info("Modes: low, medium, max (DeepThink max for DeepSeek)")
+        info("Example: opencode-proxy thinking max")
+        return
+
+    mode_lower = mode.lower()
+    valid_modes = {"low", "medium", "max", "high", "none"}
+    if mode_lower not in valid_modes:
+        error(f"Invalid thinking mode: {mode}")
+        info("Valid modes: low, medium, max, high, none")
+        return
+
+    header(f"Setting Thinking Mode: {mode_lower}")
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Read current config
+    current_config = {}
+    if OPENCODE_JSONC.exists():
+        try:
+            current_config = json.loads(OPENCODE_JSONC.read_text())
+        except Exception:
+            pass
+
+    # Set thinking config at top level
+    current_config["thinking"] = {
+        "mode": mode_lower,
+        "enabled": mode_lower != "none",
+    }
+
+    # Also add thinking to the deepseek model options if present
+    provider = current_config.setdefault("provider", {})
+    opencode_provider = provider.setdefault("opencode-unlimited-proxy", {})
+    models = opencode_provider.setdefault("models", {})
+    if "deepseek-v4.1-flash-free" in models:
+        models["deepseek-v4.1-flash-free"]["thinking"] = {
+            "mode": mode_lower,
+            "enabled": mode_lower != "none",
+        }
+
+    OPENCODE_JSONC.write_text(json.dumps(current_config, indent=2))
+    success(f"Thinking mode set to: {mode_lower}")
+    info("DeepThink/max thinking enabled for DeepSeek models." if mode_lower == "max" else "")
+    info("Restart OpenCode to apply: opencode-unlimited restart")
 
 
 def do_zoom_in():
@@ -1668,6 +1721,7 @@ def do_install():
     info("Doctor:  'opencode-proxy doctor'")
     info("Fix DNS: 'opencode-proxy fix-dns'  (if WARP/proxy can't connect)")
     info("Zoom:    'opencode-proxy zoom-in' | 'zoom-out' | 'zoom-reset'  (Termux font size)")
+    info("Thinking: 'opencode-proxy thinking <mode>'  (low, medium, max — DeepThink for DeepSeek)")
 
 
 def main():
@@ -1679,7 +1733,8 @@ def main():
                              "validate", "dry-run", "skills", "models",
                              "model", "config", "doctor", "sync",
                              "apply-skill", "continue", "fix-dns",
-                             "zoom-in", "zoom-out", "zoom-reset"],
+                             "zoom-in", "zoom-out", "zoom-reset",
+                             "thinking"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -1741,6 +1796,8 @@ def main():
         do_zoom_out()
     elif args.action == "zoom-reset":
         do_zoom_reset()
+    elif args.action == "thinking":
+        do_thinking(args.model)
 
 
 if __name__ == "__main__":

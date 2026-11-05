@@ -89,6 +89,9 @@ opencode
 | `opencode-proxy sync` | Re-sync skills from claude-skills repo |
 | `opencode-proxy continue` | Resume previous OpenCode session (`opencode --continue`) |
 | `opencode-proxy fix-dns` | Fix `/etc/resolv.conf` for WARP DNS (1.1.1.1, 8.8.8.8) |
+| `opencode-proxy zoom-in` | Increase terminal font size (Termux) |
+| `opencode-proxy zoom-out` | Decrease terminal font size (Termux) |
+| `opencode-proxy zoom-reset` | Reset terminal font size to default |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited start --continue` | Start proxy + resume previous OpenCode session |
@@ -336,6 +339,18 @@ opencode --continue
 ```
 
 Never run `opencode` directly — always go through `opencode-proxy` / `opencode-unlimited` so WARP rotates your egress IP.
+
+## Terminal Zoom 🔍
+
+If you can't pinch-to-zoom in your Android terminal, use these commands to adjust the Termux font size:
+
+```bash
+opencode-proxy zoom-in    # make text bigger
+opencode-proxy zoom-out   # make text smaller
+opencode-proxy zoom-reset # back to default
+```
+
+These modify `~/.termux/termux.properties` and reload Termux settings automatically.
 
 ## Credits 🏅
 

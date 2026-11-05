@@ -798,8 +798,11 @@ case "$1" in
     apply-skill) python3 "$SETUP" skills apply-skill "${2:-}" ;;
     continue) python3 "$SETUP" continue ;;
     fix-dns) python3 "$SETUP" fix-dns ;;
+    zoom-in) python3 "$SETUP" zoom-in ;;
+    zoom-out) python3 "$SETUP" zoom-out ;;
+    zoom-reset) python3 "$SETUP" zoom-reset ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset}"; exit 1 ;;
 esac
 """
 
@@ -936,6 +939,77 @@ def do_fix_dns():
         info("Run 'opencode-proxy restart' to apply.")
     except Exception as e:
         error(f"Could not write /etc/resolv.conf: {e}")
+
+
+def do_zoom_in():
+    """Increase terminal font size (Termux)."""
+    header("Zoom In — Terminal Font")
+    termux_dir = Path.home() / ".termux"
+    termux_dir.mkdir(parents=True, exist_ok=True)
+    props_file = termux_dir / "termux.properties"
+
+    current_size = 14
+    if props_file.exists():
+        try:
+            for line in props_file.read_text().splitlines():
+                if line.strip().startswith("font-size"):
+                    parts = line.split("=")
+                    if len(parts) == 2:
+                        current_size = float(parts[1].strip())
+        except Exception:
+            pass
+
+    new_size = min(current_size + 2, 32)
+    props_file.write_text(f"font-size = {new_size}\n")
+    try:
+        run(["termux-reload-settings"], check=False)
+    except Exception:
+        pass
+    success(f"Terminal font size: {current_size} -> {new_size}")
+    info("Pinch-to-zoom also works in Termux.")
+
+
+def do_zoom_out():
+    """Decrease terminal font size (Termux)."""
+    header("Zoom Out — Terminal Font")
+    termux_dir = Path.home() / ".termux"
+    termux_dir.mkdir(parents=True, exist_ok=True)
+    props_file = termux_dir / "termux.properties"
+
+    current_size = 14
+    if props_file.exists():
+        try:
+            for line in props_file.read_text().splitlines():
+                if line.strip().startswith("font-size"):
+                    parts = line.split("=")
+                    if len(parts) == 2:
+                        current_size = float(parts[1].strip())
+        except Exception:
+            pass
+
+    new_size = max(current_size - 2, 8)
+    props_file.write_text(f"font-size = {new_size}\n")
+    try:
+        run(["termux-reload-settings"], check=False)
+    except Exception:
+        pass
+    success(f"Terminal font size: {current_size} -> {new_size}")
+    info("Pinch-to-zoom also works in Termux.")
+
+
+def do_zoom_reset():
+    """Reset terminal font size to default (Termux)."""
+    header("Zoom Reset — Terminal Font")
+    termux_dir = Path.home() / ".termux"
+    termux_dir.mkdir(parents=True, exist_ok=True)
+    props_file = termux_dir / "termux.properties"
+
+    props_file.write_text("font-size = 14\n")
+    try:
+        run(["termux-reload-settings"], check=False)
+    except Exception:
+        pass
+    success("Terminal font size reset to 14")
 
 
 def check_arch():
@@ -1593,6 +1667,7 @@ def do_install():
     info("Config:  'opencode-proxy config'")
     info("Doctor:  'opencode-proxy doctor'")
     info("Fix DNS: 'opencode-proxy fix-dns'  (if WARP/proxy can't connect)")
+    info("Zoom:    'opencode-proxy zoom-in' | 'zoom-out' | 'zoom-reset'  (Termux font size)")
 
 
 def main():
@@ -1603,7 +1678,8 @@ def main():
                              "backup", "restore", "watchdog", "version",
                              "validate", "dry-run", "skills", "models",
                              "model", "config", "doctor", "sync",
-                             "apply-skill", "continue", "fix-dns"],
+                             "apply-skill", "continue", "fix-dns",
+                             "zoom-in", "zoom-out", "zoom-reset"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -1659,6 +1735,12 @@ def main():
         do_continue()
     elif args.action == "fix-dns":
         do_fix_dns()
+    elif args.action == "zoom-in":
+        do_zoom_in()
+    elif args.action == "zoom-out":
+        do_zoom_out()
+    elif args.action == "zoom-reset":
+        do_zoom_reset()
 
 
 if __name__ == "__main__":

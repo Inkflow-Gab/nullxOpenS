@@ -383,6 +383,23 @@ Run `opencode-proxy thinking status` or `opencode-proxy doctor` to see a visual 
 - `▲ thinking: low` (blue) — minimal reasoning
 - `○ thinking: off` (dim) — thinking disabled
 
+## Thinking Indicator Inside OpenCode CLI 🖥️
+
+The thinking level is now displayed **inside the OpenCode CLI** every time you launch it:
+
+1. **Banner banner** — When you run `opencode-unlimited start` or `opencode`, a thinking banner appears at the top showing your current thinking mode (MAX, high, medium, low, or off).
+
+2. **System prompt injection** — The thinking mode is written into your OpenCode config's `system_prompt`, so the model itself is aware of the thinking level you've set.
+
+Example banner inside CLI:
+```
+═════════════════════════════════════════════════════════════════════
+  OpenCode UNLIMITED
+  ● thinking: MAX
+  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP
+═════════════════════════════════════════════════════════════════════
+```
+
 This writes the thinking config into `~/.config/opencode/opencode.jsonc` so the model uses the specified reasoning effort on every request.
 
 ## Credits 🏅

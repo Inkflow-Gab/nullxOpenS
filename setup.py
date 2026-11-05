@@ -447,10 +447,13 @@ def do_skills(subcmd="list", name=""):
 def write_opencode_config_with_skill(system_prompt: str, skill_name: str):
     """Write OpenCode config with a skill's system prompt as the default model instructions."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    thinking_text = thinking_indicator_plain()
+    # Prepend thinking indicator to skill system prompt
+    sp_with_thinking = f"{thinking_text}\n\n{system_prompt}".strip()
     config = {
         "$schema": "https://opencode.ai/config.json",
         "model": "opencode-unlimited-proxy/deepseek-v4.1-flash-free",
-        "system_prompt": system_prompt,
+        "system_prompt": sp_with_thinking,
         "permission": {
             "*": "allow", "bash": "allow", "read": "allow", "write": "allow",
             "edit": "allow", "glob": "allow", "grep": "allow", "list": "allow", "websearch": "allow"
@@ -814,6 +817,15 @@ esac
 OPENCODE_WRAPPER_SH = """#!/usr/bin/env bash
 # OpenCode CLI wrapper — passes all flags through to opencode-bin.
 # Supports: opencode --continue  (resume previous session)
+# Shows thinking indicator banner before launching OpenCode CLI.
+THINKING_MODE="$(python3 "$HOME/.opencode-proxy/setup.py" thinking status 2>/dev/null | grep -oP '(thinking:\\s*.*)' | head -1 || echo '○ thinking: off')"
+echo ""
+echo "═════════════════════════════════════════════════════════════════════"
+echo "  OpenCode UNLIMITED"
+echo "  $THINKING_MODE"
+echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
+echo "═════════════════════════════════════════════════════════════════════"
+echo ""
 exec grun "$HOME/.local/bin/opencode-bin" "$@"
 """
 
@@ -974,6 +986,22 @@ def thinking_indicator():
     if mode == "low":
         return f"{BOLD}{BLUE}▲ thinking: low{NC}"
     return f"{DIM}○ thinking: {mode}{NC}"
+
+
+def thinking_indicator_plain():
+    """Return a plain-text thinking indicator (no color codes) for CLI display."""
+    mode, enabled = get_thinking_mode()
+    if not enabled or mode == "none":
+        return "○ thinking: off"
+    if mode == "max":
+        return "● thinking: MAX"
+    if mode == "high":
+        return "▲ thinking: high"
+    if mode == "medium":
+        return "▲ thinking: medium"
+    if mode == "low":
+        return "▲ thinking: low"
+    return f"○ thinking: {mode}"
 
 
 def do_thinking(mode=""):
@@ -1299,6 +1327,15 @@ case "$1" in
                 exit 1
             fi
         fi
+        # Show thinking indicator banner before launching OpenCode CLI
+        THINKING_MODE="$(python3 "$BASE_DIR/setup.py" thinking status 2>/dev/null | grep -oP '(thinking:\\s*.*)' | head -1 || echo '○ thinking: off')"
+        echo ""
+        echo "═════════════════════════════════════════════════════════════════════"
+        echo "  OpenCode UNLIMITED"
+        echo "  $THINKING_MODE"
+        echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
+        echo "═════════════════════════════════════════════════════════════════════"
+        echo ""
         if [ "$2" = "--continue" ]; then
             exec "$CLI" --continue
         else
@@ -1370,9 +1407,19 @@ def install_opencode_cli(dry_run=False):
     if env == "termux":
         OPENCODE_WRAPPER.write_text(OPENCODE_WRAPPER_SH)
     else:
+        thinking_cmd = f"python3 '{BASE_DIR / 'setup.py'}' thinking status 2>/dev/null | grep -oP '(thinking:\\\\s*.*)' | head -1 || echo '○ thinking: off'"
         OPENCODE_WRAPPER.write_text(f"""#!/usr/bin/env bash
 # OpenCode CLI wrapper — passes all flags through to opencode-bin.
 # Supports: opencode --continue  (resume previous session)
+# Shows thinking indicator banner before launching OpenCode CLI.
+THINKING_MODE="{thinking_cmd}"
+echo ""
+echo "═════════════════════════════════════════════════════════════════════"
+echo "  OpenCode UNLIMITED"
+echo "  $THINKING_MODE"
+echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
+echo "═════════════════════════════════════════════════════════════════════"
+echo ""
 exec "{OPENCODE_BIN}" "$@"
 """)
     os.chmod(OPENCODE_WRAPPER, 0o755)
@@ -1409,8 +1456,11 @@ def write_opencode_config(force=False):
 
     Always updates model + baseURL so OpenCode routes through opencode2api
     (with WARP rotation) instead of hitting OpenCode's free-tier rate limit.
+    Includes thinking indicator in system_prompt so it shows inside CLI.
     """
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    thinking_text = thinking_indicator_plain()
+
     if OPENCODE_JSONC.exists() and not force:
         try:
             current = json.loads(OPENCODE_JSONC.read_text())
@@ -1419,13 +1469,61 @@ def write_opencode_config(force=False):
                 "baseURL": "http://127.0.0.1:8080/v1",
                 "apiKey": "local-test-key",
             }
+            # Prepend thinking indicator to existing system_prompt
+            existing_sp = current.get("system_prompt", "") or ""
+            if thinking_text not in existing_sp:
+                current["system_prompt"] = f"{thinking_text}\n\n{existing_sp}".strip()
             OPENCODE_JSONC.write_text(json.dumps(current, indent=2))
             info("Updated existing opencode.jsonc to route through local proxy.")
         except Exception:
-            OPENCODE_JSONC.write_text(OPENCODE_JSONC_CONTENT)
+            config = {
+                "$schema": "https://opencode.ai/config.json",
+                "model": "opencode-unlimited-proxy/deepseek-v4.1-flash-free",
+                "system_prompt": thinking_text,
+                "permission": {
+                    "*": "allow", "bash": "allow", "read": "allow", "write": "allow",
+                    "edit": "allow", "glob": "allow", "grep": "allow", "list": "allow", "websearch": "allow"
+                },
+                "provider": {
+                    "opencode-unlimited-proxy": {
+                        "npm": "@ai-sdk/openai-compatible",
+                        "name": "opencode-unlimited-proxy",
+                        "options": {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": "local-test-key"},
+                        "models": {
+                            "beam-free": {}, "big-pickle": {}, "crouton-alpha-free": {},
+                            "deepseek-v4.1-flash-free": {}, "flint-40b-free": {}, "glm-5.3-flash-free": {},
+                            "mimo-v2.6-flash-free": {}, "nemotron-3.5-lightning-free": {},
+                            "nemotron-3.5-super-vl-free": {}, "pulse-alpha-free": {}
+                        }
+                    }
+                }
+            }
+            OPENCODE_JSONC.write_text(json.dumps(config, indent=2))
             info("Wrote fresh opencode.jsonc routing through local proxy.")
     else:
-        OPENCODE_JSONC.write_text(OPENCODE_JSONC_CONTENT)
+        config = {
+            "$schema": "https://opencode.ai/config.json",
+            "model": "opencode-unlimited-proxy/deepseek-v4.1-flash-free",
+            "system_prompt": thinking_text,
+            "permission": {
+                "*": "allow", "bash": "allow", "read": "allow", "write": "allow",
+                "edit": "allow", "glob": "allow", "grep": "allow", "list": "allow", "websearch": "allow"
+            },
+            "provider": {
+                "opencode-unlimited-proxy": {
+                    "npm": "@ai-sdk/openai-compatible",
+                    "name": "opencode-unlimited-proxy",
+                    "options": {"baseURL": "http://127.0.0.1:8080/v1", "apiKey": "local-test-key"},
+                    "models": {
+                        "beam-free": {}, "big-pickle": {}, "crouton-alpha-free": {},
+                        "deepseek-v4.1-flash-free": {}, "flint-40b-free": {}, "glm-5.3-flash-free": {},
+                        "mimo-v2.6-flash-free": {}, "nemotron-3.5-lightning-free": {},
+                        "nemotron-3.5-super-vl-free": {}, "pulse-alpha-free": {}
+                    }
+                }
+            }
+        }
+        OPENCODE_JSONC.write_text(json.dumps(config, indent=2))
         success("Wrote opencode.jsonc routing through local proxy.")
 
 

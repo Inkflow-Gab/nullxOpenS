@@ -1183,12 +1183,13 @@ def do_rea(subcmd="status", arg=""):
       diagnostics / doctor  Full dependency + readiness report (rea doctor)
       help       Show `rea --help`
       connect    Route REA through the OpenCode proxy (rea-unlimited wrapper)
+      start      Connect REA + launch OpenCode CLI to chat with REA
       mcp config    Print agent-ready MCP registration JSON
       mcp doctor    Validate MCP server startup + tool registration
       mcp start     Launch REA's native MCP server over stdio (foreground)
     """
     rea_available = which("rea") or (REA_BIN.exists() if "REA_BIN" in globals() else False)
-    if not rea_available and subcmd not in ("install", "status", "help", "node"):
+    if not rea_available and subcmd not in ("install", "status", "help", "node", "start"):
         warn("rea is not installed.")
         info("Run: opencode-proxy rea install  (or opencode-proxy install)")
         info("Or install manually: npm install --global rea-agents")
@@ -1253,6 +1254,11 @@ def do_rea(subcmd="status", arg=""):
         do_rea_connect()
         return
 
+    if subcmd == "start":
+        # arg holds --continue or empty
+        do_rea_start(arg)
+        return
+
     if subcmd == "mcp":
         # arg holds the mcp subcommand: config | doctor | start
         if arg == "config":
@@ -1273,7 +1279,8 @@ def do_rea(subcmd="status", arg=""):
         return
 
     error(f"Unknown rea subcommand: {subcmd}")
-    info("Usage: opencode-proxy rea {status|install|uninstall|setup|analyze|update|node|diagnostics|help|connect|mcp <config|doctor|start>} [path]")
+    info("Usage: opencode-proxy rea {status|install|uninstall|start|setup|analyze|update|node|diagnostics|help|connect|mcp <config|doctor|start>} [path]")
+    info("       opencode-proxy rea start [--continue]  # connect REA + launch OpenCode CLI")
 
 
 def do_rea_connect():
@@ -1332,6 +1339,81 @@ exec rea "$@"
     info("")
     info("REA's LLM calls now route through opencode2api with WARP IP rotation.")
     info("Make sure the proxy is running: opencode-proxy start")
+
+
+def do_rea_start(cont=""):
+    """Instantly connect REA to the OpenCode proxy and launch the CLI.
+
+    Starts the proxy if needed, installs/connects REA, then launches
+    opencode so you can chat: \"Understand how this feature works, show me
+    the evidence, and build a similar feature.\" with credits to the original.
+    """
+    header("REA Start — Connect REA + Launch OpenCode CLI")
+
+    # 1. Ensure Node.js + REA are installed (auto Node upgrade if needed).
+    if not which("rea") and not REA_BIN.exists():
+        info("REA not installed. Running managed install (Node.js 24 auto-install if needed)...")
+        install_rea()
+        if not which("rea") and not REA_BIN.exists():
+            error("REA installation failed. Run: opencode-proxy rea install")
+            return
+
+    # 2. Start the proxy if it is not already healthy.
+    if not health_ok():
+        info("Proxy is not running. Starting opencode-proxy...")
+        start_daemon()
+        if not health_ok():
+            error("Proxy did not become healthy. Run: opencode-proxy start")
+            info("   Then: opencode-proxy fix-dns  (if DNS/WARP is blocked)")
+            return
+    success("Proxy online at http://127.0.0.1:8080/v1")
+
+    # 3. Connect REA to the proxy (create rea-unlimited wrapper).
+    if not which("rea") and not REA_BIN.exists():
+        error("rea binary not found after install.")
+        return
+    rea_cmd = "rea" if which("rea") else str(REA_BIN)
+    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+    rea_unlimited = LOCAL_BIN / "rea-unlimited"
+
+    wrapper = f"""#!/usr/bin/env bash
+# rea-unlimited — REA connected to OpenCode Unlimited proxy
+# Routes REA's LLM calls through opencode2api (WARP IPv6 rotation).
+export OPENAI_BASE_URL=\"http://127.0.0.1:8080/v1\"
+export OPENAI_API_KEY=\"local-test-key\"
+export OPENAI_MODEL=\"deepseek-v4.1-flash-free\"
+export REA_MODEL=\"deepseek-v4.1-flash-free\"
+
+exec {rea_cmd} \"$@\"
+"""
+    rea_unlimited.write_text(wrapper)
+    os.chmod(rea_unlimited, 0o755)
+    success(f"REA connected to OpenCode proxy — wrapper: {rea_unlimited}")
+
+    # 4. Launch the OpenCode CLI so the user can chat with REA connected.
+    info("")
+    info("═════════════════════════════════════════════════════════════════════")
+    info("  REA is now connected to the OpenCode Unlimited proxy.")
+    info("  Chat in OpenCode CLI:")
+    info("    \"Understand how this feature works in the game, show me the")
+    info("     evidence, and build a similar feature. Give credits to the\"")
+    info("     original.\"")
+    info("═════════════════════════════════════════════════════════════════════")
+    info("")
+
+    CLI_BIN = OPENCODE_BIN
+    if not validate_opencode_bin():
+        warn("OpenCode CLI binary not found. Install it first: opencode-proxy install")
+        return
+
+    if cont.lower() == "--continue":
+        info("Resuming previous OpenCode session with REA connected...")
+        import subprocess as _sp
+        _sp.run([str(OPENCODE_WRAPPER), "--continue"])
+    else:
+        info("Launching OpenCode CLI with REA connected...")
+        import subprocess as _sp
+        _sp.run([str(OPENCODE_WRAPPER)])
 
 
 def do_rate_limit():
@@ -1580,6 +1662,117 @@ def require_rea_node(fatal=True):
     return ver
 
 
+def node_tarball_url(ver="24"):
+    """Return the Node.js tarball URL for the current host (linux arm64/x64)."""
+    arch = ARCH
+    if arch in ("aarch64", "arm64"):
+        node_arch = "arm64"
+    elif arch in ("x86_64", "amd64"):
+        node_arch = "x64"
+    else:
+        node_arch = arch
+    return f"https://nodejs.org/dist/v{ver}.x/node-v{ver}.x-linux-{node_arch}.tar.xz"
+
+
+def install_compatible_node():
+    """Try to install a REA-compatible Node.js (24.x) when the active one is too old.
+
+    Prefers nvm if available, otherwise downloads the official Node tarball for
+    the current arch/OS into $HOME/.local/node and prepends it to PATH.
+    Returns True when a compatible Node is now on PATH, False otherwise.
+    """
+    ver = node_version()
+    if ver and node_engines_ok(ver):
+        return True
+
+    header("Installing compatible Node.js for REA")
+    info(f"Current Node.js: {'.'.join(map(str, ver)) if ver else 'not found'}")
+    info(f"Required by REA: {REA_NODE_ENGINES}")
+
+    # Option 1: nvm
+    nvm_dir = Path.home() / ".nvm"
+    nvm_sh = nvm_dir / "nvm.sh"
+    if nvm_sh.exists():
+        info("nvm detected — installing Node.js 24 via nvm...")
+        try:
+            run(["bash", "-c", f". {nvm_sh} && nvm install 24 && nvm use 24"], check=False)
+            # Refresh PATH / re-detect
+            new_ver = node_version()
+            if new_ver and node_engines_ok(new_ver):
+                success(f"Node.js {'.'.join(map(str, new_ver))} installed via nvm.")
+                return True
+        except Exception as e:
+            warn(f"nvm install failed: {e}")
+
+    # Option 2: download official Node tarball (no root required)
+    info("Downloading Node.js 24 tarball (no root required)...")
+    url = node_tarball_url("24")
+    node_dir = REA_NPM_PREFIX / "node"
+    node_dir.mkdir(parents=True, exist_ok=True)
+    tar_path = node_dir / "node.tar.xz"
+    try:
+        download(url, tar_path)
+    except Exception as e:
+        warn(f"Node tarball download failed: {e}")
+        info(node_engine_remediation())
+        return False
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            extract_tar(tar_path, td)
+            # The tarball extracts into node-v<ver>-linux-<arch>/
+            extracted = None
+            for entry in node_dir.iterdir() if node_dir.exists() else []:
+                pass
+            # find the extracted directory in td
+            for item in os.listdir(td):
+                if item.startswith("node-v") and item.endswith("-linux-" + ("arm64" if ARCH in ("aarch64", "arm64") else "x64")):
+                    extracted = Path(td) / item
+                    break
+            if not extracted:
+                # fallback: any node-v dir
+                for item in os.listdir(td):
+                    if item.startswith("node-v"):
+                        extracted = Path(td) / item
+                        break
+            if not extracted:
+                error("Could not locate Node.js directory in tarball.")
+                return False
+            # Copy contents into $HOME/.local/node
+            for item in extracted.iterdir():
+                dest = node_dir / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        import shutil as _shutil
+                        _shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                if item.is_dir():
+                    shutil.copytree(item, dest)
+                else:
+                    shutil.copy2(item, dest)
+    except Exception as e:
+        warn(f"Node tarball extraction failed: {e}")
+        return False
+    finally:
+        tar_path.unlink(missing_ok=True)
+
+    node_bin = node_dir / "bin" / "node"
+    if node_bin.exists():
+        os.chmod(node_bin, 0o755)
+        # Prepend to PATH for this process
+        os.environ["PATH"] = str(node_dir / "bin") + os.pathsep + os.environ.get("PATH", "")
+        new_ver = node_version()
+        if new_ver and node_engines_ok(new_ver):
+            success(f"Node.js {'.'.join(map(str, new_ver))} installed at {node_dir}.")
+            info(f"Add to PATH: export PATH=\"{node_dir}/bin:$PATH\"")
+            return True
+
+    warn("Node.js install did not produce a usable binary.")
+    info(node_engine_remediation())
+    return False
+
+
 def install_rea(dry_run=False):
     """Install REA — Reverse Engineer Anything (morluto/rea) via npm.
 
@@ -1597,15 +1790,21 @@ def install_rea(dry_run=False):
         info(f"[dry-run] Would run: npm install --global --prefix {REA_NPM_PREFIX} {REA_PKG_VER}")
         return
 
-    # Node.js must be present and compatible before we install REA.
+    # Ensure a REA-compatible Node.js is available (auto-upgrade if needed).
     # REA is one component of NullxOpenS; an incompatible Node skips REA
     # rather than aborting the whole platform install.
     if not require_rea_node(fatal=False):
-        warn("Skipping REA installation (Node.js requirement not met).")
-        info(node_engine_remediation())
-        return
+        warn("Active Node.js is below REA's required engine — attempting auto-install of Node.js 24...")
+        if not install_compatible_node():
+            warn("Skipping REA installation (Node.js requirement not met).")
+            info(node_engine_remediation())
+            return
 
     npm = which("npm")
+    if not npm:
+        error("npm is not installed or not on PATH.")
+        info("Install Node.js (which bundles npm), then rerun setup.")
+        sys.exit(1)
     if not npm:
         error("npm is not installed or not on PATH.")
         info("Install Node.js (which bundles npm), then rerun setup.")
@@ -2149,6 +2348,7 @@ handle_opencode_unlimited() {
         echo "  3) Stop proxy + CLI"
         echo "  4) Restart proxy + CLI"
         echo "  5) Status"
+        echo "  6) REA Start — connect REA + launch OpenCode CLI"
         echo "  0) Back to main menu"
         echo ""
         printf "  Select an option: "
@@ -2175,6 +2375,7 @@ handle_opencode_unlimited() {
                fi
                ;;
             5) "$PROXY" status ; read -r -p "  Press Enter to continue..." _ ;;
+            6) python3 "$BASE_DIR/setup.py" rea start ; read -r -p "  Press Enter to continue..." _ ;;
             0) break ;;
             *) echo "  Invalid option." ; sleep 1 ;;
         esac
@@ -2233,8 +2434,33 @@ if [ $# -gt 0 ]; then
         install)
             python3 "$BASE_DIR/setup.py" install
             ;;
+        rea)
+            # opencode-unlimited rea start [--continue]  -> connect REA + launch CLI
+            # opencode-unlimited rea connect             -> create rea-unlimited wrapper
+            case "${2:-}" in
+                start|"")
+                    python3 "$BASE_DIR/setup.py" rea start "${3:-}"
+                    ;;
+                connect)
+                    python3 "$BASE_DIR/setup.py" rea connect
+                    ;;
+                status)
+                    python3 "$BASE_DIR/setup.py" rea status
+                    ;;
+                install)
+                    python3 "$BASE_DIR/setup.py" rea install
+                    ;;
+                analyze)
+                    python3 "$BASE_DIR/setup.py" rea analyze "${3:-}"
+                    ;;
+                *)
+                    echo "Usage: opencode-unlimited rea {start [--continue]|connect|status|install|analyze <path>}"
+                    exit 1
+                    ;;
+            esac
+            ;;
         *)
-            echo "Usage: opencode-unlimited [start|stop|restart|status|install]"
+            echo "Usage: opencode-unlimited [start|stop|restart|status|install|rea {start [--continue]|connect|status|install|analyze <path>}]"
             echo "       Run with no args for the interactive menu."
             exit 1
             ;;

@@ -461,6 +461,29 @@ Node.js requirement: REA requires Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`. N
 | `opencode-proxy rea mcp config` | Print agent-ready MCP registration JSON |
 | `opencode-proxy rea mcp doctor` | Validate MCP server startup + tool registration |
 | `opencode-proxy rea mcp start` | Launch REA's native MCP server over stdio (foreground) |
+| `opencode-proxy rea start [--continue]` | Connect REA + launch OpenCode CLI to chat with REA |
+| `opencode-unlimited rea start [--continue]` | Same via the opencode-unlimited launcher |
+
+### One-command setup (run these in order)
+
+```bash
+# 1. Install NullxOpenS (includes managed REA)
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
+
+# 2. Verify Node.js meets REA's engine requirement
+opencode-proxy rea node
+
+# 3. Install REA (auto-installs Node.js 24 if your Node is too old)
+opencode-proxy rea install
+
+# 4. Connect REA + launch OpenCode CLI to chat with REA
+opencode-proxy rea start
+# or resume a previous session:
+opencode-proxy rea start --continue
+
+# 5. (Optional) Register REA as an MCP server for your AI agent
+opencode-proxy rea mcp config
+```
 
 ### Connect REA to OpenCode Unlimited Proxy
 
@@ -499,9 +522,17 @@ rea-unlimited analyze-javascript-application /path/to/app --json
 
 # Keep REA up to date
 opencode-proxy rea update
+
+# Analyze game assets (extract the game's JS/Electron resources first, then):
+opencode-proxy rea start
+# Then in the OpenCode CLI chat:
+#   "Understand how this feature works in the game, show me the evidence,
+#    and build a similar feature. Give credits to the original."
+# Point REA at the extracted game directory:
+rea-unlimited analyze-javascript-application /path/to/extracted-game --json
 ```
 
-REA connects your agent to local inspection tools. Ask your agent: *"Understand how this feature works in the app, show me the evidence, and build a similar feature."*
+REA connects your agent to local inspection tools. Ask your agent: *"Understand how this feature works in the app, show me the evidence, and build a similar feature."* Always give credits to the original creators when rebuilding features from analyzed assets.
 
 ### Requirements
 - Node.js + npm (installed by `opencode-proxy install`). Node must satisfy REA's engine requirement (`^22.23.4 || ^24.22.1 || >=26.12.1`).

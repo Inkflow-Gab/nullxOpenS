@@ -73,6 +73,15 @@ opencode-proxy start
 
 ---
 
+## The look
+
+Everything is colour coded, no frames and no boxes:
+
+- `ok` green, `->` blue, `!!` yellow, `xx` red, section titles bold cyan
+- the menu numbers are green, the title bold cyan, the hints dim
+- the doctor prints one aligned column per check and names the failure it
+  found in the log together with the command that fixes it
+
 ## The two commands
 
 `opencode-unlimited` runs the menu, or takes `start`, `start --continue`,
@@ -93,6 +102,7 @@ opencode-proxy start
 | `doctor` | Check the whole install |
 | `repair` | Rewrite the commands and the config, put them back on PATH |
 | `fix-dns` | Point `/etc/resolv.conf` at 1.1.1.1 and 8.8.8.8 |
+| `fix-certs` | Install the CA bundle the gateway needs to verify Cloudflare |
 | `rate-limit` | Scan the log for 429 and quota events |
 | `logs` | Last lines of the gateway log |
 | `autostart enable\|disable\|status` | Start on device boot |
@@ -120,6 +130,8 @@ Then work down the table:
 | `bash: install.sh: No such file or directory` | You are not in the cloned folder. Run `ls`, then `cd nullxOpenS`. Or skip the clone and use the one command install. |
 | `proxy is stopped` | `opencode-proxy start`, then `opencode-proxy status` |
 | Gateway starts but never goes online | `opencode-proxy fix-dns` then `opencode-proxy restart`. Inside proot-distro the resolver is often `127.0.0.1`, which WARP cannot use. |
+| `x509: certificate signed by unknown authority` in the log | The container has no CA bundle, so the gateway cannot verify Cloudflare. `opencode-proxy fix-certs` installs `ca-certificates`, then `opencode-proxy restart`. Inside proot-distro the same thing by hand: `apt-get update && apt-get install -y ca-certificates`. |
+| `failed to verify certificate` right after a fresh install | Run `opencode-proxy fix-certs` once, then `opencode-proxy restart`. The doctor names the exact cause: `opencode-proxy doctor` reads the log and tells you which fix applies. |
 | Still `Free usage exceeded` | OpenCode is bypassing the proxy. `opencode-proxy doctor` must show `opencode.jsonc routes through the proxy` as `ok`. |
 | The CLI does not start on Termux | `pkg install glibc-repo glibc-runner`, the CLI needs glibc. |
 | The download failed during install | The installer keeps going and tells you the URL. Download it by hand and save it to `~/.opencode-proxy/bin/opencode2api`. |

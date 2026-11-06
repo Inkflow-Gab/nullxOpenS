@@ -1,55 +1,27 @@
-# OpenCode UNLIMITED 🚀
+# OpenCode UNLIMITED
 
-OpenCode Unlimited on Android (Termux) — rotating Cloudflare WARP egress pool for unlimited free OpenCode models. No root, no Docker, no external servers.
+OpenCode UNLIMITED installs and controls the [opencode2api](https://github.com/jasonxu114514/opencode2api)
+gateway and the OpenCode CLI on Android (Termux). The gateway rotates through
+Cloudflare WARP IPv6 exits, so the free tier of OpenCode does not run out of
+requests because every request leaves the device from a different address.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/platform-Android%20%7C%20Termux%20ARM64-green?style=for-the-badge" alt="platform">
-  <img src="https://img.shields.io/badge/engine-opencode2api%20v1.4.6-blue?style=for-the-badge" alt="engine">
-  <img src="https://img.shields.io/badge/opencode-v1.19.5-purple?style=for-the-badge" alt="opencode">
-  <img src="https://img.shields.io/badge/license-MIT-red?style=for-the-badge" alt="license">
-</p>
+No root, no Docker, no server of your own.
 
----
+## Requirements
 
-## About 📖
+- An ARM64 Android device (`aarch64`)
+- Termux, or a Linux distro running under `proot-distro`
+- Around 300 MB of free space for the gateway, the CLI and their dependencies
 
-OpenCode UNLIMITED is an all-in-one Python setup that installs and manages the `opencode2api` gateway plus the OpenCode CLI. It rotates through Cloudflare WARP IPv6 exits to eliminate per-IP rate limits on the anonymous free tier — giving you unlimited access to OpenCode's free models.
+## Installation
 
-Works on native Termux **and** inside `proot-distro login ubuntu` — it auto-detects `pkg` vs `apt` and skips Termux-only packages when not on Termux.
-
-Built and maintained by **null** 🛠️
-
----
-
-## Features ✨
-
-- One-command setup via `setup.py` (Termux + Ubuntu/proot-distro)
-- `opencode2api` v1.4.6 gateway with WARP IPv6 egress rotation 🌐
-- OpenCode CLI v1.19.5 via `glibc-runner` (`grun`)
-- Double-fork daemon spawner — survives terminal close
-- OpenAI-compatible `/v1` endpoint at `http://127.0.0.1:8080/v1`
-- Web dashboard at `http://127.0.0.1:8081`
-- 10 verified free-tier models exposed
-- **Skill system** — 400+ skills from alirezarezvani/claude-skills (search, categories, apply-skill, sync, add/remove)
-- **Model management** — switch, bench, and detect free models
-- **Diagnostics** — `doctor` command checks your whole setup
-- **REA (Reverse Engineer Anything)** — `opencode-proxy rea {setup|analyze|update|help|status|connect}` via morluto/rea (npm global)
-- **Skills backup** — `skills export` / `skills import` to share skill collections between devices
-- **Rate-limit monitor** — `rate-limit` scans proxy logs for 429 / usage-exceeded events
-- **Auto-start** — `autostart {enable|disable|status}` launches proxy on device boot
-- No Docker, no root, no external server required
-
----
-
-## Quick Start 🚀
-
-One command (works on Termux and proot-distro Ubuntu):
+### One command
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
 ```
 
-Or clone and run locally:
+### From a clone
 
 ```bash
 git clone https://github.com/Inkflow-Gab/nullxOpenS.git
@@ -57,538 +29,226 @@ cd nullxOpenS
 python3 setup.py install
 ```
 
-Once installed:
+### With the bootstrap script
 
-### Interactive Menu (recommended)
-Run with no args for the full menu:
-
-```bash
-opencode-unlimited
-```
-
-You'll see:
-```
-  1) REA — Reverse Engineer Anything
-  2) OpenCode Unlimited — Start / Continue
-  3) Doctor — System Diagnostics
-  4) Rate-Limit Monitor — Check 429 / usage-exceeded events
-  5) Model Thinking — Set reasoning mode (low/medium/max)
-  6) Skills Management — list / search / export / import
-  7) Model Management — list / switch / bench
-  8) Terminal Zoom — in / out / reset
-  9) Fix DNS — WARP DNS fix (1.1.1.1, 8.8.8.8)
- 10) Auto-Start — enable / disable / status
-  0) Exit
-```
-
-### Direct Commands (backward compatible)
+`install.sh` installs the missing packages first and then hands over to
+`setup.py`:
 
 ```bash
-opencode-unlimited start           # starts proxy + launches CLI together
-opencode-unlimited start --continue # starts proxy + resumes previous session
-opencode-unlimited status          # check both proxy and CLI
-opencode-unlimited stop            # stop everything
-opencode-unlimited install         # run setup
+git clone https://github.com/Inkflow-Gab/nullxOpenS.git
+cd nullxOpenS
+bash install.sh
 ```
 
-Or use them separately:
+### Inside proot-distro
+
+The installer detects `apt-get` and switches to it, so the same command works
+inside Ubuntu under `proot-distro`:
 
 ```bash
-opencode-proxy start
-opencode-proxy status
-opencode
+proot-distro login ubuntu
+apt update && apt install -y python3 curl
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
 ```
 
----
+### What the installer does
 
-## Commands 📋
+1. Installs the missing packages (`curl`, `jq`, `proot`, `python`, and on
+   Termux `glibc-runner` plus `termux-tools`)
+2. Downloads the `opencode2api` gateway into `~/.opencode-proxy/bin`
+3. Downloads the OpenCode CLI into `~/.local/bin/opencode-bin`
+4. Writes the gateway config to `~/.opencode-proxy/config.json`
+5. Writes `~/.config/opencode/opencode.jsonc` so OpenCode talks to the local
+   gateway instead of the free tier directly
+6. Writes the `opencode-proxy` and `opencode-unlimited` commands into
+   `~/.local/bin` and adds that folder to `PATH` in `~/.bashrc`
 
-| Command | Description |
-|---------|-------------|
-| `python3 setup.py install` | Full one-command setup |
-| `opencode-proxy start` | Start the proxy daemon |
-| `opencode-proxy stop` | Stop the proxy daemon |
-| `opencode-proxy restart` | Restart the proxy daemon |
-| `opencode-proxy status` | Check daemon + WARP + model status |
-| `opencode-proxy test [model]` | Send a test chat request |
-| `opencode-proxy bench [model]` | Benchmark a model (time to first token) |
-| `opencode-proxy logs` | Stream recent proxy logs |
-| `opencode-proxy config` | Show current OpenCode configuration |
-| `opencode-proxy doctor` | Run system diagnostics |
-| `opencode-proxy sync` | Re-sync skills from claude-skills repo |
-| `opencode-proxy continue` | Resume previous OpenCode session (`opencode --continue`) |
-| `opencode-proxy fix-dns` | Fix `/etc/resolv.conf` for WARP DNS (1.1.1.1, 8.8.8.8) |
-| `opencode-proxy zoom-in` | Increase terminal font size (Termux) |
-| `opencode-proxy zoom-out` | Decrease terminal font size (Termux) |
-| `opencode-proxy zoom-reset` | Reset terminal font size to default |
-| `opencode-proxy thinking <mode>` | Set model thinking mode (low, medium, max) |
-| `opencode-proxy rea {setup|analyze|update|help|status|connect}` | REA — Reverse Engineer Anything + connect to OpenCode proxy |
-| `opencode-proxy rate-limit` | Scan proxy logs for 429 / rate-limit events |
-| `opencode-proxy autostart {enable|disable|status}` | Start proxy automatically on device boot |
-| `opencode` | Launch OpenCode CLI TUI |
-| `opencode-unlimited start` | Start proxy + launch CLI together |
-| `opencode-unlimited start --continue` | Start proxy + resume previous OpenCode session |
-| `opencode-unlimited stop` | Stop proxy + CLI |
-| `opencode-unlimited restart` | Restart proxy + CLI |
-| `opencode-unlimited status` | Check both proxy and CLI |
-
-### Skills (from alirezarezvani/claude-skills) 🎯
-
-| Command | Description |
-|---------|-------------|
-| `opencode-proxy skills install` | Download skills from claude-skills repo |
-| `opencode-proxy skills sync` | Re-sync skills from claude-skills repo |
-| `opencode-proxy skills list` | List all installed skills |
-| `opencode-proxy skills categories` | List skill categories |
-| `opencode-proxy skills search <term>` | Search skills by name/category/description |
-| `opencode-proxy skills show <name>` | Show skill details & system prompt |
-| `opencode-proxy skills add <name>` | Create a custom skill |
-| `opencode-proxy skills remove <name>` | Remove a skill |
-| `opencode-proxy skills export <file>` | Export all skills to a backup JSON file |
-| `opencode-proxy skills import <file>` | Import skills from a backup JSON file |
-| `opencode-proxy apply-skill <name>` | Apply a skill's system prompt to OpenCode config |
-
-### Models ⚡
-
-| Command | Description |
-|---------|-------------|
-| `opencode-proxy models list` | List all detected free models with rankings |
-| `opencode-proxy models best` | Show top 3 free models |
-| `opencode-proxy model <name>` | Switch default OpenCode model |
-
----
-
-## Architecture 🏗️
-
-```
-Android Device (Termux / Ubuntu proot-distro)
-├── OpenCode CLI (TUI)          -> grun -> opencode-bin
-│      └── HTTP 127.0.0.1:8080/v1
-├── opencode2api Gateway        -> chroot -> WARP IPv6 pool
-│      ├── rotating egress on 429/403
-│      └── web dashboard :8081
-└── Outbound WireGuard UDP (2408)
-      -> Cloudflare Edge
-      -> Rotated egress /64 block
-      -> OpenCode Free-Tier Inference
-```
-
----
-
-## Models Exposed ⚡
-
-| Model | Use Case | Context |
-|-------|----------|---------|
-| `deepseek-v4.1-flash-free` | Code, algorithms, refactoring ⭐ | 128K |
-| `big-pickle` | Multi-step reasoning, planning | 200K |
-| `crouton-alpha-free` | Massive context, multimodal docs ⭐ | 1M |
-| `nemotron-3.5-super-vl-free` | Vision-language tasks ⭐ | 1M |
-| `nemotron-3.5-lightning-free` | Low-latency scripts, commands | 262K |
-| `glm-5.3-flash-free` | General knowledge | 128K |
-| `beam-free` | Step-by-step logic | 1M |
-| `mimo-v2.6-flash-free` | Compact quick assistant | 128K |
-| `flint-40b-free` | Open-weight foundation | 128K |
-| `pulse-alpha-free` | Multimodal input | 1M |
-
-⭐ = Top 3 recommended free models
-
----
-
-## Skills 🎯
-
-OpenCode UNLIMITED downloads skills from **alirezarezvani/claude-skills** — 400+ production-ready skills across 20+ domains (engineering, marketing, c-level advisory, business, compliance, finance, productivity, research, and more). Each skill includes a system prompt that tells OpenCode how to behave for a specific task.
-
-### Install skills
-
-```bash
-opencode-proxy skills install
-```
-
-This shows a live progress bar while downloading skills from GitHub.
-
-### List installed skills
-
-```bash
-opencode-proxy skills list
-```
-
-### Browse skill categories
-
-```bash
-opencode-proxy skills categories
-```
-
-### Search for a skill
-
-```bash
-opencode-proxy skills search frontend
-```
-
-### Show a skill's content
-
-```bash
-opencode-proxy skills show agent-memory
-```
-
-### Create a custom skill
-
-```bash
-opencode-proxy skills add my-web-skill
-# Then enter: description, category, and system prompt
-```
-
-### Remove a skill
-
-```bash
-opencode-proxy skills remove my-web-skill
-```
-
----
-
-## Applying Skills to OpenCode 🔧
-
-Skills are **system prompts** — they change how OpenCode behaves. Apply a skill directly to your OpenCode configuration:
-
-### Step 1: Apply a skill
-
-```bash
-opencode-proxy apply-skill frontend-dev
-```
-
-This writes the skill's system prompt into your OpenCode config (`~/.config/opencode/opencode.jsonc`).
-
-### Step 2: Restart OpenCode
-
-```bash
-opencode-unlimited restart
-```
-
-### Step 3: Use OpenCode normally
-
-OpenCode will now behave according to the skill's system prompt. Switch models if needed:
-
-```bash
-opencode-proxy model crouton-alpha-free
-```
-
-Or browse and preview skills before applying:
-
-```bash
-opencode-proxy skills show agent-memory
-```
-
----
-
-## Model Detection & Switching 🔄
-
-OpenCode UNLIMITED detects free models from the OpenCode gateway and ranks them by quality and context window:
-
-```bash
-opencode-proxy models list
-opencode-proxy models best
-```
-
-Switch your default model:
-
-```bash
-opencode-proxy model deepseek-v4.1-flash-free
-```
-
-Then restart OpenCode:
-
-```bash
-opencode-unlimited restart
-```
-
----
-
-## Diagnostics 🩺
-
-Check that your whole setup is healthy:
+## Checking the install
 
 ```bash
 opencode-proxy doctor
 ```
 
-This verifies Python, architecture, packages, binaries, configs, skills, gateway connectivity, and that OpenCode is routed through the proxy — and gives you actionable fix suggestions.
+Every line is either `ok` or `FAIL`. If the gateway is not online yet, start it:
 
-If the proxy can't connect (DNS/WARP blocked), run:
-
-```bash
-opencode-proxy fix-dns
-```
-
----
-
-## Resume a Session (--continue) 🔄
-
-OpenCode UNLIMITED supports resuming your previous OpenCode conversation with the `--continue` flag:
-
-```bash
-opencode --continue
-```
-
-This forwards `--continue` straight to the OpenCode CLI (`opencode-bin`), so it picks up right where your last session left off.
-
-You can also trigger it through the proxy manager:
-
-```bash
-opencode-proxy continue
-```
-
-Both are equivalent — `opencode --continue` is the direct form, `opencode-proxy continue` goes through the manager wrapper.
-
-## Troubleshooting 🩺
-
-### Still seeing "Free usage exceeded" / rate-limit errors?
-
-This means OpenCode is hitting OpenCode's servers directly instead of going through the proxy. Fix it:
-
-**Step 1: Make sure the proxy is running**
 ```bash
 opencode-proxy start
-opencode-proxy status   # should show gateway online + WARP active
+opencode-proxy status
 ```
 
-**Step 2: Fix DNS if WARP can't connect**
+The API is then reachable at `http://127.0.0.1:8080/v1` and the dashboard at
+`http://127.0.0.1:8081`.
+
+## Usage
+
+### The launcher
+
+```bash
+opencode-unlimited
+```
+
+Without arguments it opens a menu: start the proxy and the CLI together,
+resume the last session, switch models, change the thinking mode, adjust the
+terminal font, fix DNS, toggle auto start, run the doctor, or read the rate
+limit log.
+
+The same thing works with arguments:
+
+```bash
+opencode-unlimited start
+opencode-unlimited start --continue
+opencode-unlimited stop
+opencode-unlimited restart
+opencode-unlimited status
+```
+
+### The proxy command
+
+| Command | Description |
+|---------|-------------|
+| `opencode-proxy start` | Start the gateway in the background |
+| `opencode-proxy stop` | Stop the gateway |
+| `opencode-proxy restart` | Stop and start the gateway again |
+| `opencode-proxy status` | Show the gateway, the WARP state and the model count |
+| `opencode-proxy test [model]` | Send a test request through the gateway |
+| `opencode-proxy bench [model]` | Measure the time to the first token |
+| `opencode-proxy logs` | Print the last lines of the gateway log |
+| `opencode-proxy models list` | List the free models with their context size |
+| `opencode-proxy models best` | Show the three best models |
+| `opencode-proxy model <model-id>` | Change the default model |
+| `opencode-proxy thinking <mode>` | Set the reasoning effort |
+| `opencode-proxy thinking status` | Show the current reasoning effort |
+| `opencode-proxy config` | Print the current OpenCode configuration |
+| `opencode-proxy doctor` | Check the whole install |
+| `opencode-proxy fix-dns` | Point `/etc/resolv.conf` at 1.1.1.1 and 8.8.8.8 |
+| `opencode-proxy rate-limit` | Scan the log for 429 and quota events |
+| `opencode-proxy autostart enable` | Start the proxy when the device boots |
+| `opencode-proxy autostart disable` | Stop starting it on boot |
+| `opencode-proxy autostart status` | Show the auto start state |
+| `opencode-proxy backup` | Save the configs into a tarball |
+| `opencode-proxy restore [file]` | Restore a backup |
+| `opencode-proxy update` | Download the latest `setup.py` |
+| `opencode-proxy uninstall` | Remove everything the installer wrote |
+| `opencode-proxy version` | Show the installed versions |
+
+### Thinking mode
+
+DeepSeek and the other reasoning models accept a reasoning effort. It is stored
+in `~/.config/opencode/opencode.jsonc` and picked up the next time OpenCode
+starts:
+
+```bash
+opencode-proxy thinking low
+opencode-proxy thinking medium
+opencode-proxy thinking max
+opencode-proxy thinking none
+opencode-proxy thinking status
+```
+
+### Auto start on boot
+
+Needs the Termux boot app:
+
+```bash
+opencode-proxy autostart enable
+opencode-proxy autostart status
+```
+
+The script is written to `~/.termux/boot/opencode-proxy-start.sh`.
+
+## Free models
+
+The gateway exposes the free tier of OpenCode through the proxy. The ones the
+installer knows about:
+
+| Model | Good for | Context |
+|-------|----------|---------|
+| `deepseek-v4.1-flash-free` | Code, algorithms, refactoring | 128K |
+| `crouton-alpha-free` | Large documents, multimodal input | 1M |
+| `nemotron-3.5-super-vl-free` | Vision and language tasks | 1M |
+| `beam-free` | Step by step logic | 1M |
+| `pulse-alpha-free` | Multimodal input | 1M |
+| `big-pickle` | Planning, multi step reasoning | 200K |
+| `nemotron-3.5-lightning-free` | Fast answers, commands | 262K |
+| `glm-5.3-flash-free` | General knowledge | 128K |
+| `flint-40b-free` | Open weight models | 128K |
+| `mimo-v2.6-flash-free` | Small, quick assistant | 128K |
+
+The gateway refreshes the list itself, so `opencode-proxy models list` can
+show more than what is written here.
+
+## Troubleshooting
+
+**"Free usage exceeded" or other rate limits**
+
+OpenCode is most likely talking to the upstream directly instead of through
+the gateway:
+
+```bash
+opencode-proxy status      # the gateway has to be online
+opencode-proxy doctor      # "opencode.jsonc routes through the proxy" has to be ok
+opencode-proxy config      # baseURL should be http://127.0.0.1:8080/v1
+opencode-proxy test deepseek-v4.1-flash-free
+```
+
+Always start OpenCode through `opencode-unlimited` or `opencode-proxy` so the
+requests leave through WARP.
+
+**The gateway starts but never comes online**
+
+WARP needs a working resolver. Inside proot-distro `/etc/resolv.conf` often
+points at `127.0.0.1`, which the userspace WARP client cannot use:
+
 ```bash
 opencode-proxy fix-dns
 opencode-proxy restart
 ```
 
-**Step 3: Confirm OpenCode is routed through the proxy**
-```bash
-opencode-proxy doctor   # check "opencode.jsonc → proxy" shows "routed"
-opencode-proxy config   # baseURL should be http://127.0.0.1:8080/v1
-```
+**The OpenCode CLI does not start on Termux**
 
-**Step 4: Test through the proxy**
-```bash
-opencode-proxy test deepseek-v4.1-flash-free
-```
-
-If all checks pass, launch OpenCode through the proxy:
-```bash
-opencode-unlimited start
-opencode --continue
-```
-
-Never run `opencode` directly — always go through `opencode-proxy` / `opencode-unlimited` so WARP rotates your egress IP.
-
-## Terminal Zoom 🔍
-
-If you can't pinch-to-zoom in your Android terminal, use these commands to adjust the Termux font size:
+The CLI is a glibc binary and needs the runner:
 
 ```bash
-opencode-proxy zoom-in    # make text bigger
-opencode-proxy zoom-out   # make text smaller
-opencode-proxy zoom-reset # back to default
+pkg install glibc-repo glibc-runner
 ```
 
-These modify `~/.termux/termux.properties` and reload Termux settings automatically.
+After that `opencode-proxy doctor` should show `package grun` as installed.
 
-## Model Thinking 🧠
-
-Set the reasoning/thinking mode for your models (DeepThink max for DeepSeek):
+**Check the log**
 
 ```bash
-opencode-proxy thinking low     # minimal reasoning
-opencode-proxy thinking medium  # balanced reasoning
-opencode-proxy thinking max     # DeepThink max — DeepSeek's deepest reasoning
-opencode-proxy thinking none    # disable thinking
-opencode-proxy thinking status  # show visual thinking indicator
-```
-
-Then restart OpenCode to apply:
-
-```bash
-opencode-unlimited restart
-```
-
-Valid modes: `low`, `medium`, `max`, `high`, `none`
-
-## Visual Thinking Indicator 🔍
-
-Run `opencode-proxy thinking status` or `opencode-proxy doctor` to see a visual indicator:
-
-- `● thinking: MAX` (magenta) — DeepThink max, DeepSeek's deepest reasoning
-- `▲ thinking: high` (red) — high reasoning effort
-- `▲ thinking: medium` (yellow) — balanced reasoning
-- `▲ thinking: low` (blue) — minimal reasoning
-- `○ thinking: off` (dim) — thinking disabled
-
-## Thinking Indicator Inside OpenCode CLI 🖥️
-
-The thinking level is now displayed **inside the OpenCode CLI** every time you launch it:
-
-1. **Banner banner** — When you run `opencode-unlimited start` or `opencode`, a thinking banner appears at the top showing your current thinking mode (MAX, high, medium, low, or off).
-
-2. **System prompt injection** — The thinking mode is written into your OpenCode config's `system_prompt`, so the model itself is aware of the thinking level you've set.
-
-Example banner inside CLI:
-```
-═════════════════════════════════════════════════════════════════════
-  OpenCode UNLIMITED
-  ● thinking: MAX
-  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP
-═════════════════════════════════════════════════════════════════════
-```
-
-This writes the thinking config into `~/.config/opencode/opencode.jsonc` so the model uses the specified reasoning effort on every request.
-
-## REA — Reverse Engineer Anything 🔍
-
-REA (morluto/rea) is an agentic reverse-engineering toolkit that inspects native binaries, JavaScript/Electron apps, .NET assemblies, and websites — locally, with evidence and limitations for every conclusion.
-
-REA is managed by NullxOpenS as a version-pinned npm package (`rea-agents@6.8.0`) installed to `~/.local/bin/rea` (no root required). The Python layer handles installation, updates, removal, diagnostics, and MCP configuration; the Node.js layer executes REA's actual analysis and MCP server.
-
-Node.js requirement: REA requires Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`. Node 24.22.0 (and older) is **not** sufficient — use `opencode-proxy rea node` to verify.
-
-### REA Commands
-
-| Command | Description |
-|---------|-------------|
-| `opencode-proxy rea status` | Check rea installation + version + Node compatibility |
-| `opencode-proxy rea install` | Managed install of rea-agents (version-pinned, no root) |
-| `opencode-proxy rea uninstall` | Remove the managed REA installation |
-| `opencode-proxy rea setup` | Configure your agent with REA (interactive) |
-| `opencode-proxy rea connect` | Connect REA to OpenCode proxy (127.0.0.1:8080/v1) |
-| `opencode-proxy rea analyze <path>` | Analyze a JS/Electron app dir or ASAR (`--json`) |
-| `opencode-proxy rea update` | Update rea-agents to latest |
-| `opencode-proxy rea node` | Verify Node.js against REA's engine requirement |
-| `opencode-proxy rea diagnostics` | Full dependency + readiness report (`rea doctor`) |
-| `opencode-proxy rea help` | Show `rea --help` |
-| `opencode-proxy rea mcp config` | Print agent-ready MCP registration JSON |
-| `opencode-proxy rea mcp doctor` | Validate MCP server startup + tool registration |
-| `opencode-proxy rea mcp start` | Launch REA's native MCP server over stdio (foreground) |
-| `opencode-proxy rea start [--continue]` | Connect REA + launch OpenCode CLI to chat with REA |
-| `opencode-unlimited rea start [--continue]` | Same via the opencode-unlimited launcher |
-
-### One-command setup (run these in order)
-
-```bash
-# 1. Install NullxOpenS (includes managed REA)
-curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
-
-# 2. Verify Node.js meets REA's engine requirement
-opencode-proxy rea node
-
-# 3. Install REA (auto-installs Node.js 24 if your Node is too old)
-opencode-proxy rea install
-
-# 4. Connect REA + launch OpenCode CLI to chat with REA
-opencode-proxy rea start
-# or resume a previous session:
-opencode-proxy rea start --continue
-
-# 5. (Optional) Register REA as an MCP server for your AI agent
-opencode-proxy rea mcp config
-```
-
-### Connect REA to OpenCode Unlimited Proxy
-
-Run `opencode-proxy rea connect` to create a wrapper script at
-`~/.local/bin/rea-unlimited` that routes REA's LLM calls through OpenCode
-UNLIMITED's `opencode2api` gateway with WARP IPv6 rotation:
-
-```bash
-# 1. Start the proxy first
-opencode-proxy start
-
-# 2. Connect REA to the proxy
-opencode-proxy rea connect
-
-# 3. Use REA through the proxy (all LLM calls go through WARP)
-rea-unlimited analyze-javascript-application /path/to/app --json
-```
-
-The wrapper sets:
-- `OPENAI_BASE_URL=http://127.0.0.1:8080/v1`
-- `OPENAI_API_KEY=local-test-key`
-- `OPENAI_MODEL=deepseek-v4.1-flash-free`
-- `REA_MODEL=deepseek-v4.1-flash-free`
-
-### Examples
-
-```bash
-# Set up REA with your agent (Claude Code, Codex, Cursor, etc.)
-opencode-proxy rea setup
-
-# Connect REA to OpenCode proxy for unlimited LLM access
-opencode-proxy rea connect
-
-# Analyze an extracted Electron/JS app directory (through proxy)
-rea-unlimited analyze-javascript-application /path/to/app --json
-
-# Keep REA up to date
-opencode-proxy rea update
-
-# Analyze game assets (extract the game's JS/Electron resources first, then):
-opencode-proxy rea start
-# Then in the OpenCode CLI chat:
-#   "Understand how this feature works in the game, show me the evidence,
-#    and build a similar feature. Give credits to the original."
-# Point REA at the extracted game directory:
-rea-unlimited analyze-javascript-application /path/to/extracted-game --json
-```
-
-REA connects your agent to local inspection tools. Ask your agent: *"Understand how this feature works in the app, show me the evidence, and build a similar feature."* Always give credits to the original creators when rebuilding features from analyzed assets.
-
-### Requirements
-- Node.js + npm (installed by `opencode-proxy install`). Node must satisfy REA's engine requirement (`^22.23.4 || ^24.22.1 || >=26.12.1`).
-- For native binary analysis: an existing Hopper, Ghidra, IDA, or Kuna installation (optional — desktop-only, not available on Android).
-- Android ARM64: works in native Termux and Ubuntu proot-distro when a compliant Node.js is available. Static JavaScript / APK-signature / ELF inspection runs on-device; Hopper/Ghidra/IDA/JADX/Playwright require an external analysis machine.
-
-### MCP integration (AI agents)
-
-REA exposes a native MCP server over stdio (`rea mcp`), registering 229 tools + 6 prompts. Use NullxOpenS to manage it:
-
-```bash
-# Show the JSON to paste into your AI agent's MCP settings
-opencode-proxy rea mcp config
-
-# Validate the MCP server starts and lists all tools
-opencode-proxy rea mcp doctor
-
-# Run the MCP server foreground (for testing)
-opencode-proxy rea mcp start
-```
-
-No Python MCP proxy is built — AI agents connect directly to REA's native MCP server.
-
-More: [morluto/rea](https://github.com/morluto/rea) · [rea.tools](https://rea.tools/)
-
-## Rate-Limit Monitor 📊
-
-Scan proxy logs for 429 / rate-limit / "usage exceeded" events:
-
-```bash
+opencode-proxy logs
 opencode-proxy rate-limit
 ```
 
-Shows total events, recent occurrences, and which models are most affected — plus actionable suggestions (fix DNS, switch model, restart proxy).
+## Files
 
-## Auto-Start on Boot 🔌
+| Path | What it holds |
+|------|---------------|
+| `~/.opencode-proxy/config.json` | Gateway configuration |
+| `~/.opencode-proxy/proxy.log` | Gateway log |
+| `~/.opencode-proxy/proxy.pid` | PID of the running gateway |
+| `~/.opencode-proxy/backups/` | Backups made by `opencode-proxy backup` |
+| `~/.config/opencode/opencode.jsonc` | OpenCode configuration |
+| `~/.local/bin/opencode-proxy` | The gateway command |
+| `~/.local/bin/opencode-unlimited` | The launcher |
+| `~/.local/bin/opencode` | The OpenCode CLI wrapper |
 
-Configure the proxy to start automatically when your Android device boots (requires Termux with termux-boot app):
+## Uninstall
 
 ```bash
-opencode-proxy autostart enable    # start proxy on boot
-opencode-proxy autostart disable   # stop auto-starting
-opencode-proxy autostart status    # check current state
+opencode-proxy uninstall
 ```
 
-When enabled, a script is created at `~/.termux/boot/opencode-proxy-start.sh` that launches the proxy and OpenCode CLI on boot.
+It stops the gateway and removes the files listed above, including the
+generated `opencode.jsonc`. Make a backup first with
+`opencode-proxy backup` if you want to keep it.
 
-## Credits 🏅
+## Credits
 
-- **Development & Creator**: null
-- `ebouther/opencode-unlimited-proxy` — free-tier gate research & multi-egress rotation strategy
-- `jasonxu114514/opencode2api` — Go gateway engine + WARP userspace egress manager
-- OpenCode — open-source terminal coding assistant
-- `alirezarezvani/claude-skills` — 400+ production-ready skill prompts
-
----
+- `jasonxu114514/opencode2api` - the gateway engine and the WARP egress manager
+- `ebouther/opencode-unlimited-proxy` - the free tier and multi egress research
+- OpenCode - the terminal coding assistant this project wraps
 
 ## License
 

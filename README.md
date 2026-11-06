@@ -59,11 +59,36 @@ python3 setup.py install
 
 Once installed:
 
+### Interactive Menu (recommended)
+Run with no args for the full menu:
+
+```bash
+opencode-unlimited
+```
+
+You'll see:
+```
+  1) REA — Reverse Engineer Anything
+  2) OpenCode Unlimited — Start / Continue
+  3) Doctor — System Diagnostics
+  4) Rate-Limit Monitor — Check 429 / usage-exceeded events
+  5) Model Thinking — Set reasoning mode (low/medium/max)
+  6) Skills Management — list / search / export / import
+  7) Model Management — list / switch / bench
+  8) Terminal Zoom — in / out / reset
+  9) Fix DNS — WARP DNS fix (1.1.1.1, 8.8.8.8)
+ 10) Auto-Start — enable / disable / status
+  0) Exit
+```
+
+### Direct Commands (backward compatible)
+
 ```bash
 opencode-unlimited start           # starts proxy + launches CLI together
 opencode-unlimited start --continue # starts proxy + resumes previous session
 opencode-unlimited status          # check both proxy and CLI
 opencode-unlimited stop            # stop everything
+opencode-unlimited install         # run setup
 ```
 
 Or use them separately:

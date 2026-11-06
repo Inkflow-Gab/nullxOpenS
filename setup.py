@@ -882,7 +882,7 @@ case "$1" in
     rate-limit) python3 "$SETUP" rate-limit ;;
     autostart) python3 "$SETUP" autostart "${2:-}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill|export|import] [name|file]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rea {setup|analyze|update|help|status} [path]|rate-limit|autostart {enable|disable|status}}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill|export|import] [name|file]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rea {setup|analyze|update|help|status|connect} [path]|rate-limit|autostart {enable|disable|status}}"; exit 1 ;;
 esac
 """
 
@@ -1208,8 +1208,70 @@ def do_rea(subcmd="status", arg=""):
         run(["rea", "--help"], check=False)
         return
 
+    if subcmd == "connect":
+        do_rea_connect()
+        return
+
     error(f"Unknown rea subcommand: {subcmd}")
-    info("Usage: opencode-proxy rea {setup|analyze|update|help|status} [path]")
+    info("Usage: opencode-proxy rea {setup|analyze|update|help|status|connect} [path]")
+
+
+def do_rea_connect():
+    """Connect REA to OpenCode Unlimited proxy as its LLM backend.
+
+    Sets OPENAI_BASE_URL and OPENAI_API_KEY so rea routes its LLM calls
+    through opencode2api (http://127.0.0.1:8080/v1) with WARP IP rotation.
+    Creates a wrapper script at ~/.local/bin/rea-unlimited that launches
+    rea with the correct environment.
+    """
+    header("REA — Connect to OpenCode Unlimited")
+
+    # Check proxy is running
+    if not health_ok():
+        error("Proxy is not running. Start it first: opencode-proxy start")
+        return
+
+    # Verify rea is installed
+    if not which("rea"):
+        warn("rea not installed. Installing now...")
+        run(["npm", "install", "--global", REA_PKG], check=False)
+        if not which("rea"):
+            error("Failed to install rea-agents.")
+            return
+
+    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+    rea_unlimited = LOCAL_BIN / "rea-unlimited"
+
+    # Create wrapper script that sets OpenAI-compatible env vars pointing
+    # to the local OpenCode proxy (with WARP rotation).
+    wrapper = f"""#!/usr/bin/env bash
+# rea-unlimited — REA connected to OpenCode Unlimited proxy
+# Routes REA's LLM calls through opencode2api (WARP IPv6 rotation).
+export OPENAI_BASE_URL="http://127.0.0.1:8080/v1"
+export OPENAI_API_KEY="local-test-key"
+export OPENAI_MODEL="deepseek-v4.1-flash-free"
+export REA_MODEL="deepseek-v4.1-flash-free"
+
+exec rea "$@"
+"""
+    rea_unlimited.write_text(wrapper)
+    os.chmod(rea_unlimited, 0o755)
+
+    success("REA connected to OpenCode Unlimited proxy!")
+    info(f"Wrapper created: {rea_unlimited}")
+    info("")
+    info("Usage:")
+    info(f"  {rea_unlimited} --help                          # show REA help")
+    info(f"  {rea_unlimited} analyze-javascript-application <path>  --json")
+    info("")
+    info("Environment variables set:")
+    info("  OPENAI_BASE_URL  = http://127.0.0.1:8080/v1  (OpenCode proxy)")
+    info("  OPENAI_API_KEY   = local-test-key")
+    info("  OPENAI_MODEL     = deepseek-v4.1-flash-free")
+    info("  REA_MODEL        = deepseek-v4.1-flash-free")
+    info("")
+    info("REA's LLM calls now route through opencode2api with WARP IP rotation.")
+    info("Make sure the proxy is running: opencode-proxy start")
 
 
 def do_rate_limit():
@@ -1642,9 +1704,10 @@ show_rea_menu() {
     echo ""
     echo "  1) Status — check rea installation + version"
     echo "  2) Setup — configure your agent (interactive)"
-    echo "  3) Analyze JavaScript Application — path to app dir / ASAR"
-    echo "  4) Update — update rea-agents to latest"
-    echo "  5) Help — show rea --help"
+    echo "  3) Connect to OpenCode Proxy — route REA through opencode2api + WARP"
+    echo "  4) Analyze JavaScript Application — path to app dir / ASAR"
+    echo "  5) Update — update rea-agents to latest"
+    echo "  6) Help — show rea --help"
     echo "  0) Back to main menu"
     echo ""
     printf "  Select an option: "
@@ -1657,13 +1720,14 @@ handle_rea() {
         case "$rea_choice" in
             1) "$PROXY" rea status ; read -r -p "  Press Enter to continue..." _ ;;
             2) "$PROXY" rea setup ; read -r -p "  Press Enter to continue..." _ ;;
-            3) read -r -p "  Enter path to JS/Electron app dir: " rea_path
+            3) "$PROXY" rea connect ; read -r -p "  Press Enter to continue..." _ ;;
+            4) read -r -p "  Enter path to JS/Electron app dir: " rea_path
                if [ -n "$rea_path" ]; then
                    "$PROXY" rea analyze "$rea_path"
                fi
                read -r -p "  Press Enter to continue..." _ ;;
-            4) "$PROXY" rea update ; read -r -p "  Press Enter to continue..." _ ;;
-            5) "$PROXY" rea help ; read -r -p "  Press Enter to continue..." _ ;;
+            5) "$PROXY" rea update ; read -r -p "  Press Enter to continue..." _ ;;
+            6) "$PROXY" rea help ; read -r -p "  Press Enter to continue..." _ ;;
             0) break ;;
             *) echo "  Invalid option." ; sleep 1 ;;
         esac
@@ -2328,7 +2392,7 @@ def do_install():
     info("Zoom:    'opencode-proxy zoom-in' | 'zoom-out' | 'zoom-reset'  (Termux font size)")
     info("Thinking: 'opencode-proxy thinking <mode>'  (low, medium, max — DeepThink for DeepSeek)")
     info("          'opencode-proxy thinking status'  (show current thinking indicator)")
-    info("REA:      'opencode-proxy rea {setup|analyze|update|help|status}'  (Reverse Engineer Anything)")
+    info("REA:      'opencode-proxy rea {setup|analyze|update|help|status|connect}'  (Reverse Engineer Anything)")
     info("Rate-limit: 'opencode-proxy rate-limit'  (scan proxy logs for 429/rate-limit events)")
     info("Autostart:  'opencode-proxy autostart {enable|disable|status}'  (start proxy on device boot)")
 

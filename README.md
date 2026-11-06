@@ -33,6 +33,7 @@ Built and maintained by **null** 🛠️
 - **Skill system** — 400+ skills from alirezarezvani/claude-skills (search, categories, apply-skill, sync, add/remove)
 - **Model management** — switch, bench, and detect free models
 - **Diagnostics** — `doctor` command checks your whole setup
+- **REA (Reverse Engineer Anything)** — `opencode-proxy rea {setup|analyze|update|help|status}` via morluto/rea (npm global)
 - No Docker, no root, no external server required
 
 ---
@@ -93,6 +94,7 @@ opencode
 | `opencode-proxy zoom-out` | Decrease terminal font size (Termux) |
 | `opencode-proxy zoom-reset` | Reset terminal font size to default |
 | `opencode-proxy thinking <mode>` | Set model thinking mode (low, medium, max) |
+| `opencode-proxy rea {setup|analyze|update|help|status}` | REA — Reverse Engineer Anything (morluto/rea) |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited start --continue` | Start proxy + resume previous OpenCode session |
@@ -401,6 +403,43 @@ Example banner inside CLI:
 ```
 
 This writes the thinking config into `~/.config/opencode/opencode.jsonc` so the model uses the specified reasoning effort on every request.
+
+## REA — Reverse Engineer Anything 🔍
+
+REA (morluto/rea) is an agentic reverse-engineering toolkit that inspects native binaries, JavaScript/Electron apps, .NET assemblies, and websites — locally, with evidence and limitations for every conclusion.
+
+It's installed globally via npm as part of `opencode-proxy install` (`npm install --global rea-agents`).
+
+### REA Commands
+
+| Command | Description |
+|---------|-------------|
+| `opencode-proxy rea status` | Check rea installation + version |
+| `opencode-proxy rea setup` | Configure your agent with REA (interactive) |
+| `opencode-proxy rea analyze <path>` | Analyze a JS/Electron app dir or ASAR (`--json`) |
+| `opencode-proxy rea update` | Update rea-agents to latest |
+| `opencode-proxy rea help` | Show `rea --help` |
+
+### Examples
+
+```bash
+# Set up REA with your agent (Claude Code, Codex, Cursor, etc.)
+opencode-proxy rea setup
+
+# Analyze an extracted Electron/JS app directory
+opencode-proxy rea analyze /path/to/app --json
+
+# Keep REA up to date
+opencode-proxy rea update
+```
+
+REA connects your agent to local inspection tools. Ask your agent: *"Understand how this feature works in the app, show me the evidence, and build a similar feature."*
+
+### Requirements
+- Node.js + npm (installed by `opencode-proxy install`)
+- For native binary analysis: an existing Hopper, Ghidra, IDA, or Kuna installation (optional)
+
+More: [morluto/rea](https://github.com/morluto/rea) · [rea.tools](https://rea.tools/)
 
 ## Credits 🏅
 

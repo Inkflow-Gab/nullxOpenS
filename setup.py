@@ -98,8 +98,14 @@ API_KEY = "local-test-key"
 ARCH = os.uname().machine
 
 TERMUX_ONLY = {"termux-tools", "glibc-repo", "glibc-runner"}
-REQUIRED_PKGS = ["curl", "jq", "proot", "python"]
+REQUIRED_PKGS = ["curl", "jq", "proot", "python", "nodejs"]
 GLIBC_PKGS = ["glibc-repo", "glibc-runner"]
+
+# ════════════════════════════════════════════════════════════════════════════
+# REA — Reverse Engineer Anything (morluto/rea)
+# ════════════════════════════════════════════════════════════════════════════
+REA_PKG = "rea-agents"
+REA_SETUP_URL = "https://github.com/morluto/rea"
 
 CONFIG_JSON = {
     "listen": "127.0.0.1:8080",
@@ -809,8 +815,9 @@ case "$1" in
     zoom-out) python3 "$SETUP" zoom-out ;;
     zoom-reset) python3 "$SETUP" zoom-reset ;;
     thinking) python3 "$SETUP" thinking "${2:-}" ;;
+    rea) python3 "$SETUP" rea "${2:-}" "${3:-}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rea {setup|analyze|update|help|status} [path]}"; exit 1 ;;
 esac
 """
 
@@ -1077,6 +1084,69 @@ def do_thinking(mode=""):
     info(f"Current status: {thinking_indicator()}")
 
 
+def do_rea(subcmd="status", arg=""):
+    """Manage REA — Reverse Engineer Anything (morluto/rea).
+
+    Subcommands:
+      status   Show rea installation status
+      setup    Run `rea setup` to configure your agent (interactive)
+      analyze  Run `rea analyze-javascript-application <path> --json`
+      update   Run `rea update`
+      help     Show `rea --help`
+    """
+    if not which("rea"):
+        warn("rea not installed. Run: opencode-proxy install  (installs rea-agents globally)")
+        info("Or install manually: npm install --global rea-agents")
+        return
+
+    if subcmd == "status":
+        header("REA — Reverse Engineer Anything")
+        try:
+            out = run(["rea", "--version"], capture=True)
+            info(f"rea version: {out.stdout.strip()}")
+        except Exception:
+            info("rea version: unknown")
+        info(f"rea binary: {which('rea')}")
+        info("")
+        info("Usage:")
+        info("  opencode-proxy rea setup          # configure your agent (interactive)")
+        info("  opencode-proxy rea analyze <path> # analyze a JS/Electron app dir")
+        info("  opencode-proxy rea update         # update rea-agents")
+        info("  opencode-proxy rea help           # show rea --help")
+        return
+
+    if subcmd == "setup":
+        header("REA Setup — Configure Your Agent")
+        info("Running: rea setup  (interactive — approve changes when prompted)")
+        run(["rea", "setup"], check=False)
+        return
+
+    if subcmd == "analyze":
+        if not arg:
+            error("Usage: opencode-proxy rea analyze <path>")
+            info("Example: opencode-proxy rea analyze /path/to/electron-app")
+            info("         opencode-proxy rea analyze /path/to/extracted-asar")
+            return
+        header(f"REA Analyze: {arg}")
+        info("Running: rea analyze-javascript-application <path> --json")
+        run(["rea", "analyze-javascript-application", arg, "--json"], check=False)
+        return
+
+    if subcmd == "update":
+        header("REA Update")
+        info("Running: rea update")
+        run(["rea", "update"], check=False)
+        return
+
+    if subcmd == "help":
+        header("REA Help")
+        run(["rea", "--help"], check=False)
+        return
+
+    error(f"Unknown rea subcommand: {subcmd}")
+    info("Usage: opencode-proxy rea {setup|analyze|update|help|status} [path]")
+
+
 def do_zoom_in():
     """Increase terminal font size (Termux)."""
     header("Zoom In — Terminal Font")
@@ -1167,6 +1237,8 @@ def install_packages(dry_run=False):
         needed = [p for p in needed if p not in TERMUX_ONLY]
         if not which("python3") and "python" not in needed:
             needed.append("python3")
+        if not which("npm") and "npm" not in needed:
+            needed.append("npm")
 
     needed = [p for p in needed if not which(p)]
 
@@ -1281,6 +1353,38 @@ def install_engine(dry_run=False):
     os.chmod(ENGINE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
     success("Engine installed.")
+
+
+def install_rea(dry_run=False):
+    """Install REA — Reverse Engineer Anything (morluto/rea) globally via npm.
+
+    Provides the `rea` CLI for analyzing binaries, Electron/JS apps, .NET,
+    and websites locally with agent tooling.
+    """
+    header("Installing REA — Reverse Engineer Anything")
+    info(f"Package: {REA_PKG} (npm global)")
+    info(f"Repo: {REA_SETUP_URL}")
+
+    if dry_run:
+        info(f"[dry-run] Would run: npm install --global {REA_PKG}")
+        return
+
+    if which("rea"):
+        info("rea already installed — skipping.")
+        return
+
+    try:
+        run(["npm", "install", "--global", REA_PKG])
+    except subprocess.CalledProcessError as e:
+        error(f"rea-agents install failed: {e}")
+        info("Try manually: npm install --global rea-agents")
+        return
+
+    if which("rea"):
+        success("rea installed globally.")
+        info("Run: opencode-proxy rea setup  (configure your agent)")
+    else:
+        warn("rea installed but binary not on PATH — try: npm bin -g")
 
 
 def write_daemon_spawner():
@@ -1855,6 +1959,7 @@ def do_install():
         pass
     install_packages()
     install_engine()
+    install_rea()
     write_daemon_spawner()
     write_config()
     write_manager()
@@ -1876,6 +1981,7 @@ def do_install():
     info("Zoom:    'opencode-proxy zoom-in' | 'zoom-out' | 'zoom-reset'  (Termux font size)")
     info("Thinking: 'opencode-proxy thinking <mode>'  (low, medium, max — DeepThink for DeepSeek)")
     info("          'opencode-proxy thinking status'  (show current thinking indicator)")
+    info("REA:      'opencode-proxy rea {setup|analyze|update|help|status}'  (Reverse Engineer Anything)")
 
 
 def main():
@@ -1888,7 +1994,7 @@ def main():
                              "model", "config", "doctor", "sync",
                              "apply-skill", "continue", "fix-dns",
                              "zoom-in", "zoom-out", "zoom-reset",
-                             "thinking"],
+                             "thinking", "rea"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -1952,6 +2058,8 @@ def main():
         do_zoom_reset()
     elif args.action == "thinking":
         do_thinking(args.model)
+    elif args.action == "rea":
+        do_rea(args.model, args.archive)
 
 
 if __name__ == "__main__":

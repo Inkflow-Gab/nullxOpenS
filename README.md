@@ -440,18 +440,27 @@ This writes the thinking config into `~/.config/opencode/opencode.jsonc` so the 
 
 REA (morluto/rea) is an agentic reverse-engineering toolkit that inspects native binaries, JavaScript/Electron apps, .NET assemblies, and websites — locally, with evidence and limitations for every conclusion.
 
-It's installed globally via npm as part of `opencode-proxy install` (`npm install --global rea-agents`).
+REA is managed by NullxOpenS as a version-pinned npm package (`rea-agents@6.8.0`) installed to `~/.local/bin/rea` (no root required). The Python layer handles installation, updates, removal, diagnostics, and MCP configuration; the Node.js layer executes REA's actual analysis and MCP server.
+
+Node.js requirement: REA requires Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`. Node 24.22.0 (and older) is **not** sufficient — use `opencode-proxy rea node` to verify.
 
 ### REA Commands
 
 | Command | Description |
 |---------|-------------|
-| `opencode-proxy rea status` | Check rea installation + version |
+| `opencode-proxy rea status` | Check rea installation + version + Node compatibility |
+| `opencode-proxy rea install` | Managed install of rea-agents (version-pinned, no root) |
+| `opencode-proxy rea uninstall` | Remove the managed REA installation |
 | `opencode-proxy rea setup` | Configure your agent with REA (interactive) |
 | `opencode-proxy rea connect` | Connect REA to OpenCode proxy (127.0.0.1:8080/v1) |
 | `opencode-proxy rea analyze <path>` | Analyze a JS/Electron app dir or ASAR (`--json`) |
 | `opencode-proxy rea update` | Update rea-agents to latest |
+| `opencode-proxy rea node` | Verify Node.js against REA's engine requirement |
+| `opencode-proxy rea diagnostics` | Full dependency + readiness report (`rea doctor`) |
 | `opencode-proxy rea help` | Show `rea --help` |
+| `opencode-proxy rea mcp config` | Print agent-ready MCP registration JSON |
+| `opencode-proxy rea mcp doctor` | Validate MCP server startup + tool registration |
+| `opencode-proxy rea mcp start` | Launch REA's native MCP server over stdio (foreground) |
 
 ### Connect REA to OpenCode Unlimited Proxy
 
@@ -495,8 +504,26 @@ opencode-proxy rea update
 REA connects your agent to local inspection tools. Ask your agent: *"Understand how this feature works in the app, show me the evidence, and build a similar feature."*
 
 ### Requirements
-- Node.js + npm (installed by `opencode-proxy install`)
-- For native binary analysis: an existing Hopper, Ghidra, IDA, or Kuna installation (optional)
+- Node.js + npm (installed by `opencode-proxy install`). Node must satisfy REA's engine requirement (`^22.23.4 || ^24.22.1 || >=26.12.1`).
+- For native binary analysis: an existing Hopper, Ghidra, IDA, or Kuna installation (optional — desktop-only, not available on Android).
+- Android ARM64: works in native Termux and Ubuntu proot-distro when a compliant Node.js is available. Static JavaScript / APK-signature / ELF inspection runs on-device; Hopper/Ghidra/IDA/JADX/Playwright require an external analysis machine.
+
+### MCP integration (AI agents)
+
+REA exposes a native MCP server over stdio (`rea mcp`), registering 229 tools + 6 prompts. Use NullxOpenS to manage it:
+
+```bash
+# Show the JSON to paste into your AI agent's MCP settings
+opencode-proxy rea mcp config
+
+# Validate the MCP server starts and lists all tools
+opencode-proxy rea mcp doctor
+
+# Run the MCP server foreground (for testing)
+opencode-proxy rea mcp start
+```
+
+No Python MCP proxy is built — AI agents connect directly to REA's native MCP server.
 
 More: [morluto/rea](https://github.com/morluto/rea) · [rea.tools](https://rea.tools/)
 

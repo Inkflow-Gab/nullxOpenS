@@ -61,8 +61,8 @@ def which(cmd):
     return shutil.which(cmd)
 
 
-def run(cmd, check=True, capture=False):
-    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
+def run(cmd, check=True, capture=False, timeout=None):
+    return subprocess.run(cmd, check=check, capture_output=capture, text=True, timeout=timeout)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -105,7 +105,12 @@ GLIBC_PKGS = ["glibc-repo", "glibc-runner"]
 # REA — Reverse Engineer Anything (morluto/rea)
 # ════════════════════════════════════════════════════════════════════════════
 REA_PKG = "rea-agents"
+REA_VER = "6.8.0"
+REA_PKG_VER = f"{REA_PKG}@{REA_VER}"
 REA_SETUP_URL = "https://github.com/morluto/rea"
+REA_NODE_ENGINES = "^22.23.4 || ^24.22.1 || >=26.12.1"
+REA_BIN = LOCAL_BIN / "rea"
+REA_NPM_PREFIX = LOCAL_BIN.parent  # $HOME/.local
 
 CONFIG_JSON = {
     "listen": "127.0.0.1:8080",
@@ -770,6 +775,17 @@ def do_doctor():
     gw_healthy = health_ok()
     checks.append(("gateway health", "online" if gw_healthy else "offline", gw_healthy))
 
+    # Node.js + REA
+    node_ver = node_version()
+    node_ok = node_ver is not None and node_engines_ok(node_ver)
+    checks.append((
+        "Node.js",
+        ".".join(map(str, node_ver)) if node_ver else "missing",
+        node_ok,
+    ))
+    rea_installed = bool(which("rea") or REA_BIN.exists())
+    checks.append(("REA (rea-agents)", "installed" if rea_installed else "missing", rea_installed))
+
     # Thinking mode indicator
     thinking_mode, thinking_enabled = get_thinking_mode()
     checks.append(("thinking mode", thinking_indicator(), thinking_enabled or thinking_mode != "none"))
@@ -803,6 +819,10 @@ def do_doctor():
         info("   Or: opencode-proxy config  (to inspect current config)")
     if skill_count == 0:
         info("Run: opencode-proxy skills install  (to download skills)")
+    if not node_ok:
+        info("Run: opencode-proxy rea node  (see the REA Node.js engine requirement)")
+    if not rea_installed:
+        info("Run: opencode-proxy rea install  (to install the managed REA engine)")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1153,40 +1173,55 @@ def do_rea(subcmd="status", arg=""):
     """Manage REA — Reverse Engineer Anything (morluto/rea).
 
     Subcommands:
-      status   Show rea installation status
-      setup    Run `rea setup` to configure your agent (interactive)
-      analyze  Run `rea analyze-javascript-application <path> --json`
-      update   Run `rea update`
-      help     Show `rea --help`
+      status     Show rea installation status + Node compatibility
+      install    Managed install of rea-agents (version-pinned)
+      uninstall  Remove the managed REA installation
+      update     Run `rea update`
+      setup      Run `rea setup` to configure your agent (interactive)
+      analyze    Run `rea analyze-javascript-application <path> --json`
+      node       Verify Node.js against REA's engine requirement
+      diagnostics / doctor  Full dependency + readiness report (rea doctor)
+      help       Show `rea --help`
+      connect    Route REA through the OpenCode proxy (rea-unlimited wrapper)
+      mcp config    Print agent-ready MCP registration JSON
+      mcp doctor    Validate MCP server startup + tool registration
+      mcp start     Launch REA's native MCP server over stdio (foreground)
     """
-    if not which("rea"):
-        warn("rea not installed. Run: opencode-proxy install  (installs rea-agents globally)")
+    rea_available = which("rea") or (REA_BIN.exists() if "REA_BIN" in globals() else False)
+    if not rea_available and subcmd not in ("install", "status", "help", "node"):
+        warn("rea is not installed.")
+        info("Run: opencode-proxy rea install  (or opencode-proxy install)")
         info("Or install manually: npm install --global rea-agents")
         return
 
     if subcmd == "status":
-        header("REA — Reverse Engineer Anything")
-        try:
-            out = run(["rea", "--version"], capture=True)
-            info(f"rea version: {out.stdout.strip()}")
-        except Exception:
-            info("rea version: unknown")
-        info(f"rea binary: {which('rea')}")
-        info("")
-        info("Usage:")
-        info("  opencode-proxy rea setup          # configure your agent (interactive)")
-        info("  opencode-proxy rea analyze <path> # analyze a JS/Electron app dir")
-        info("  opencode-proxy rea update         # update rea-agents")
-        info("  opencode-proxy rea help           # show rea --help")
+        rea_status()
+        return
+
+    if subcmd == "install":
+        install_rea()
+        return
+
+    if subcmd == "uninstall":
+        uninstall_rea()
         return
 
     if subcmd == "setup":
+        if not which("rea"):
+            warn("rea not installed. Installing now...")
+            install_rea()
+            if not which("rea"):
+                error("Failed to install rea-agents.")
+                return
         header("REA Setup — Configure Your Agent")
         info("Running: rea setup  (interactive — approve changes when prompted)")
         run(["rea", "setup"], check=False)
         return
 
     if subcmd == "analyze":
+        if not which("rea"):
+            error("rea is not installed. Run: opencode-proxy rea install")
+            return
         if not arg:
             error("Usage: opencode-proxy rea analyze <path>")
             info("Example: opencode-proxy rea analyze /path/to/electron-app")
@@ -1198,9 +1233,7 @@ def do_rea(subcmd="status", arg=""):
         return
 
     if subcmd == "update":
-        header("REA Update")
-        info("Running: rea update")
-        run(["rea", "update"], check=False)
+        update_rea()
         return
 
     if subcmd == "help":
@@ -1208,12 +1241,39 @@ def do_rea(subcmd="status", arg=""):
         run(["rea", "--help"], check=False)
         return
 
+    if subcmd == "node":
+        rea_node_check()
+        return
+
+    if subcmd in ("diagnostics", "doctor"):
+        rea_diagnostics()
+        return
+
     if subcmd == "connect":
         do_rea_connect()
         return
 
+    if subcmd == "mcp":
+        # arg holds the mcp subcommand: config | doctor | start
+        if arg == "config":
+            rea_mcp_config()
+        elif arg == "doctor":
+            rea_mcp_doctor()
+        elif arg == "start":
+            rea_mcp_start()
+        elif arg in ("", "help"):
+            header("REA MCP — Native MCP Server Management")
+            info("Usage: opencode-proxy rea mcp {config|doctor|start}")
+            info("  config   Print agent-ready MCP registration JSON")
+            info("  doctor   Validate MCP server startup + tool registration")
+            info("  start    Launch REA's MCP server over stdio (foreground)")
+        else:
+            error(f"Unknown mcp subcommand: {arg}")
+            info("Usage: opencode-proxy rea mcp {config|doctor|start}")
+        return
+
     error(f"Unknown rea subcommand: {subcmd}")
-    info("Usage: opencode-proxy rea {setup|analyze|update|help|status|connect} [path]")
+    info("Usage: opencode-proxy rea {status|install|uninstall|setup|analyze|update|node|diagnostics|help|connect|mcp <config|doctor|start>} [path]")
 
 
 def do_rea_connect():
@@ -1231,11 +1291,11 @@ def do_rea_connect():
         error("Proxy is not running. Start it first: opencode-proxy start")
         return
 
-    # Verify rea is installed
+    # Verify rea is installed (use the managed install path)
     if not which("rea"):
-        warn("rea not installed. Installing now...")
-        run(["npm", "install", "--global", REA_PKG], check=False)
-        if not which("rea"):
+        warn("rea not installed. Installing now via the managed REA installer...")
+        install_rea()
+        if not which("rea") and not REA_BIN.exists():
             error("Failed to install rea-agents.")
             return
 
@@ -1448,6 +1508,364 @@ def check_arch():
         sys.exit(1)
 
 
+# ═════════════════════════════════════════════════════════════════════════════
+# Node.js engine verification (REA engines.node: ^22.23.4 || ^24.22.1 || >=26.12.1)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+def node_version():
+    """Return the active Node.js version tuple (major, minor, patch) or None."""
+    node = which("node")
+    if not node:
+        return None
+    try:
+        out = run([node, "-p", "process.versions.node"], capture=True, check=False)
+        text = out.stdout.strip()
+    except Exception:
+        return None
+    if not text:
+        return None
+    text = text.lstrip("v").split("+", 1)[0]
+    parts = text.split(".")
+    if len(parts) < 3:
+        return None
+    try:
+        return tuple(int(p) for p in parts[:3])
+    except ValueError:
+        return None
+
+
+def node_engines_ok(ver):
+    """True when `ver` satisfies REA's engines.node requirement."""
+    if ver is None:
+        return False
+    major, minor, patch = ver
+    if major == 22:
+        return (minor > 23) or (minor == 23 and patch >= 4)
+    if major == 24:
+        return (minor > 22) or (minor == 22 and patch >= 1)
+    if major == 26:
+        return (minor > 12) or (minor == 12 and patch >= 1)
+    return major > 26
+
+
+def node_engine_remediation():
+    return (
+        f"REA requires Node.js {REA_NODE_ENGINES}. Install one via:\n"
+        "  nvm:  nvm install 24 && nvm use 24      (https://github.com/nvm-sh/nvm)\n"
+        "  fnm:  fnm install 24 && fnm use 24      (https://github.com/Schniz/fnm)\n"
+        "  or download https://nodejs.org/dist/latest-v24.x/  (aarch64 tarball on ARM64)"
+    )
+
+
+def require_rea_node(fatal=True):
+    """Verify Node.js is present and satisfies REA's engine requirement.
+
+    Returns the version tuple or None. When fatal, exits on failure.
+    """
+    ver = node_version()
+    if ver is None:
+        error("Node.js is not installed or not on PATH.")
+        info(node_engine_remediation())
+        if fatal:
+            sys.exit(1)
+        return None
+    if not node_engines_ok(ver):
+        error(f"Node.js {'.'.join(map(str, ver))} is below REA's required engine: {REA_NODE_ENGINES}")
+        info(node_engine_remediation())
+        if fatal:
+            sys.exit(1)
+        return None
+    success(f"Node.js {'.'.join(map(str, ver))} satisfies REA engines ({REA_NODE_ENGINES}).")
+    return ver
+
+
+def install_rea(dry_run=False):
+    """Install REA — Reverse Engineer Anything (morluto/rea) via npm.
+
+    Version-pinned to REA_VER. On Linux/Termux installs with
+    --prefix $HOME/.local so no root or system-prefix conflicts occur.
+    The executable lands at $HOME/.local/bin/rea (already on PATH).
+    """
+    header(f"Installing REA — Reverse Engineer Anything v{REA_VER}")
+    info(f"Package: {REA_PKG_VER}")
+    info(f"Repo: {REA_SETUP_URL}")
+    info(f"Node engines required: {REA_NODE_ENGINES}")
+
+    if dry_run:
+        require_rea_node(fatal=False)
+        info(f"[dry-run] Would run: npm install --global --prefix {REA_NPM_PREFIX} {REA_PKG_VER}")
+        return
+
+    # Node.js must be present and compatible before we install REA.
+    # REA is one component of NullxOpenS; an incompatible Node skips REA
+    # rather than aborting the whole platform install.
+    if not require_rea_node(fatal=False):
+        warn("Skipping REA installation (Node.js requirement not met).")
+        info(node_engine_remediation())
+        return
+
+    npm = which("npm")
+    if not npm:
+        error("npm is not installed or not on PATH.")
+        info("Install Node.js (which bundles npm), then rerun setup.")
+        sys.exit(1)
+
+    # Skip when the pinned version is already installed.
+    if REA_BIN.exists():
+        try:
+            out = run([str(REA_BIN), "--version"], capture=True, check=False)
+            installed = out.stdout.strip()
+            if installed == REA_VER:
+                success(f"rea {REA_VER} already installed at {REA_BIN}.")
+                return
+            warn(f"rea {installed} installed; upgrading to {REA_VER}.")
+        except Exception:
+            warn("Existing rea binary present; reinstalling.")
+
+    REA_NPM_PREFIX.mkdir(parents=True, exist_ok=True)
+
+    try:
+        run([
+            npm, "install", "--global",
+            f"--prefix={REA_NPM_PREFIX}",
+            REA_PKG_VER,
+        ])
+    except subprocess.CalledProcessError as e:
+        error(f"rea-agents install failed: {e}")
+        info(f"Try manually: npm install --global --prefix {REA_NPM_PREFIX} {REA_PKG_VER}")
+        return
+
+    if REA_BIN.exists():
+        try:
+            out = run([str(REA_BIN), "--version"], capture=True, check=False)
+            info(f"rea version: {out.stdout.strip()}")
+        except Exception:
+            pass
+        success(f"rea {REA_VER} installed at {REA_BIN}.")
+        info("Run: opencode-proxy rea setup  (configure your agent)")
+    else:
+        warn("rea installed but binary not on PATH — check npm prefix and PATH.")
+
+
+def uninstall_rea(dry_run=False):
+    """Remove the managed REA installation."""
+    header("Uninstalling REA — Reverse Engineer Anything")
+    if dry_run:
+        info(f"[dry-run] Would run: npm uninstall --global --prefix {REA_NPM_PREFIX} {REA_PKG}")
+        return
+    npm = which("npm")
+    if not npm:
+        error("npm is not installed or not on PATH.")
+        return
+    had_rea = bool(which("rea") or REA_BIN.exists())
+    try:
+        run([npm, "uninstall", "--global", f"--prefix={REA_NPM_PREFIX}", REA_PKG], check=False)
+    except subprocess.CalledProcessError as e:
+        warn(f"npm uninstall reported: {e}")
+    removed = False
+    if REA_BIN.exists():
+        try:
+            REA_BIN.unlink()
+            info(f"Removed {REA_BIN}")
+            removed = True
+        except Exception as e:
+            warn(f"Could not remove {REA_BIN}: {e}")
+    # Also remove the legacy wrapper if present.
+    rea_unlimited = LOCAL_BIN / "rea-unlimited"
+    if rea_unlimited.exists():
+        try:
+            rea_unlimited.unlink()
+            info(f"Removed {rea_unlimited}")
+            removed = True
+        except Exception as e:
+            warn(f"Could not remove {rea_unlimited}: {e}")
+    if had_rea or removed:
+        success("REA removed.")
+    else:
+        info("No managed REA installation found.")
+
+
+def update_rea(dry_run=False):
+    """Update REA to the latest release via `rea update`."""
+    header("Updating REA — Reverse Engineer Anything")
+    if not REA_BIN.exists():
+        error("rea is not installed. Run: opencode-proxy rea install")
+        return
+    if dry_run:
+        info("[dry-run] Would run: rea update")
+        return
+    info("Running: rea update")
+    run(["rea", "update"], check=False)
+
+
+def rea_status():
+    """Show REA installation status, version, and Node compatibility."""
+    header("REA — Reverse Engineer Anything")
+    if not which("rea") and not REA_BIN.exists():
+        warn("rea is not installed.")
+        info("Run: opencode-proxy rea install  (or opencode-proxy install)")
+        return
+    bin_path = which("rea") or str(REA_BIN)
+    info(f"rea binary: {bin_path}")
+    try:
+        out = run([str(Path(bin_path)) if not which("rea") else "rea", "--version"], capture=True, check=False)
+        info(f"rea version: {out.stdout.strip()}")
+    except Exception:
+        info("rea version: unknown")
+    info("")
+    info("Node.js engine check:")
+    require_rea_node(fatal=False)
+    info("")
+    info("Usage:")
+    info("  opencode-proxy rea status           # this report")
+    info("  opencode-proxy rea install          # install managed REA")
+    info("  opencode-proxy rea setup            # configure your agent (interactive)")
+    info("  opencode-proxy rea analyze <path>   # analyze a JS/Electron app dir")
+    info("  opencode-proxy rea update           # update rea-agents to latest")
+    info("  opencode-proxy rea uninstall        # remove REA")
+    info("  opencode-proxy rea diagnostics      # full dependency + readiness report")
+    info("  opencode-proxy rea help             # show rea --help")
+    info("  opencode-proxy rea connect          # route REA through OpenCode proxy")
+
+
+def rea_node_check():
+    """StandNode: verify Node.js against REA's engine requirement and exit."""
+    header("Node.js — REA Engine Requirement")
+    ver = node_version()
+    if ver is None:
+        error("Node.js is not installed or not on PATH.")
+        info(node_engine_remediation())
+        sys.exit(1)
+    ok = node_engines_ok(ver)
+    info(f"Detected Node.js: {'.'.join(map(str, ver))}")
+    info(f"Required by REA:  {REA_NODE_ENGINES}")
+    if ok:
+        success("Node.js satisfies REA's engine requirement.")
+    else:
+        error("Node.js does NOT satisfy REA's engine requirement.")
+        info(node_engine_remediation())
+        sys.exit(1)
+
+
+def rea_diagnostics():
+    """Run REA's built-in `doctor` and report dependency/readiness state."""
+    header("REA Diagnostics — Dependency & Readiness Report")
+    if not which("rea") and not REA_BIN.exists():
+        error("rea is not installed. Run: opencode-proxy rea install")
+        return
+    rea_cmd = "rea" if which("rea") else str(REA_BIN)
+    info(f"Running: {rea_cmd} doctor")
+    try:
+        out = run([rea_cmd, "doctor"], capture=True, check=False)
+        text = out.stdout or ""
+    except Exception as e:
+        error(f"Failed to run `rea doctor`: {e}")
+        return
+    print(text)
+    # Summarize the node check from doctor output for quick scanning.
+    node_ok = "classification: missing_dependency" not in text or "node" not in text
+    if "name: node" in text:
+        for line in text.splitlines():
+            if line.strip().startswith("detail:") and "node" in text.splitlines()[max(0, text.splitlines().index(line) - 2):]:
+                break
+    if node_ok and "healthy: true" in text:
+        success("REA doctor reports the environment is healthy.")
+    else:
+        warn("REA doctor reports issues — review the output above and fix the failing checks.")
+    info("")
+    info("MCP validation:")
+    rea_mcp_doctor()
+
+
+def rea_mcp_config():
+    """Print an agent-ready MCP registration for REA's native stdio server."""
+    header("REA MCP Configuration")
+    if not which("rea") and not REA_BIN.exists():
+        error("rea is not installed. Run: opencode-proxy rea install")
+        return
+    rea_cmd = "rea" if which("rea") else str(REA_BIN)
+    config = {
+        "mcpServers": {
+            "rea": {
+                "command": rea_cmd,
+                "args": ["mcp"],
+                "description": "REA — Reverse Engineer Anything (morluto/rea)",
+            }
+        }
+    }
+    print(json.dumps(config, indent=2))
+    info("")
+    info("Paste the `mcpServers.rea` block into your AI agent's MCP settings file.")
+    info("Example locations:")
+    info("  Claude Code:  ~/.claude.json  (or project .mcp.json)")
+    info("  Codex:        ~/.codex/config.toml  [mcp_servers.rea]")
+    info("  Cursor:       ~/.cursor/mcp.json")
+    info("")
+    info("Validate with: opencode-proxy rea mcp doctor")
+
+
+def rea_mcp_doctor():
+    """Validate REA's MCP server startup and tool registration."""
+    header("REA MCP Doctor")
+    if not which("rea") and not REA_BIN.exists():
+        error("rea is not installed. Run: opencode-proxy rea install")
+        return
+    rea_cmd = "rea" if which("rea") else str(REA_BIN)
+    info(f"Running: {rea_cmd} mcp doctor")
+    try:
+        out = run([rea_cmd, "mcp", "doctor", "--format", "json"], capture=True, check=False, timeout=60)
+        text = out.stdout or ""
+    except subprocess.TimeoutExpired:
+        error("`rea mcp doctor` timed out after 60 seconds.")
+        return
+    except Exception as e:
+        error(f"Failed to run `rea mcp doctor`: {e}")
+        return
+    if not text:
+        warn("`rea mcp doctor` produced no output.")
+        return
+    try:
+        data = json.loads(text)
+        healthy = data.get("healthy", False)
+        server = data.get("server", {})
+        inv = data.get("inventory", {})
+        tools = inv.get("tools", {})
+        prompts = inv.get("prompts", {})
+        if healthy:
+            success(f"MCP server healthy: {server.get('name', 'rea')} v{server.get('version', '?')}")
+        else:
+            error("MCP server reported unhealthy.")
+        info(f"Protocol: {server.get('protocol_version', '?')}")
+        info(f"Tools: expected={tools.get('expected','?')} observed={tools.get('observed','?')} "
+             f"missing={tools.get('missing','?')} unexpected={tools.get('unexpected','?')} "
+             f"duplicates={tools.get('duplicates','?')}")
+        info(f"Prompts: expected={prompts.get('expected','?')} observed={prompts.get('observed','?')}")
+        if not healthy:
+            warn("Review `stderr` diagnostics above; fix failing checks before registering with an agent.")
+    except json.JSONDecodeError:
+        # Fall back to printing raw output when JSON parsing fails.
+        print(text)
+
+
+def rea_mcp_start():
+    """Launch REA's native MCP server over stdio (foreground, for testing)."""
+    header("REA MCP Server (stdio)")
+    if not which("rea") and not REA_BIN.exists():
+        error("rea is not installed. Run: opencode-proxy rea install")
+        return
+    rea_cmd = "rea" if which("rea") else str(REA_BIN)
+    info(f"Starting: {rea_cmd} mcp  (Ctrl+C to stop)")
+    info("REA speaks the Model Context Protocol over stdio. Do not mix other output here.")
+    run([rea_cmd, "mcp"], check=False)
+
+
+def write_manager():
+    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+    MANAGER_FILE.write_text(MANAGER_SH)
+    os.chmod(MANAGER_FILE, 0o755)
+
+
 def install_packages(dry_run=False):
     env = detect_env()
     needed = [p for p in REQUIRED_PKGS if not which(p)]
@@ -1579,36 +1997,8 @@ def install_engine(dry_run=False):
     success("Engine installed.")
 
 
-def install_rea(dry_run=False):
-    """Install REA — Reverse Engineer Anything (morluto/rea) globally via npm.
-
-    Provides the `rea` CLI for analyzing binaries, Electron/JS apps, .NET,
-    and websites locally with agent tooling.
-    """
-    header("Installing REA — Reverse Engineer Anything")
-    info(f"Package: {REA_PKG} (npm global)")
-    info(f"Repo: {REA_SETUP_URL}")
-
-    if dry_run:
-        info(f"[dry-run] Would run: npm install --global {REA_PKG}")
-        return
-
-    if which("rea"):
-        info("rea already installed — skipping.")
-        return
-
-    try:
-        run(["npm", "install", "--global", REA_PKG])
-    except subprocess.CalledProcessError as e:
-        error(f"rea-agents install failed: {e}")
-        info("Try manually: npm install --global rea-agents")
-        return
-
-    if which("rea"):
-        success("rea installed globally.")
-        info("Run: opencode-proxy rea setup  (configure your agent)")
-    else:
-        warn("rea installed but binary not on PATH — try: npm bin -g")
+# NOTE: install_rea() was consolidated above (version-pinned, --prefix).
+# This legacy definition was removed to avoid a duplicate symbol.
 
 
 def write_daemon_spawner():
@@ -1703,11 +2093,17 @@ show_rea_menu() {
     echo "╚═════════════════════════════════════════════════════════════════════╝"
     echo ""
     echo "  1) Status — check rea installation + version"
-    echo "  2) Setup — configure your agent (interactive)"
-    echo "  3) Connect to OpenCode Proxy — route REA through opencode2api + WARP"
-    echo "  4) Analyze JavaScript Application — path to app dir / ASAR"
-    echo "  5) Update — update rea-agents to latest"
-    echo "  6) Help — show rea --help"
+    echo "  2) Install — managed install of rea-agents (version-pinned)"
+    echo "  3) Uninstall — remove the managed REA installation"
+    echo "  4) Node — verify Node.js against REA's engine requirement"
+    echo "  5) Diagnostics — full dependency + readiness report (rea doctor)"
+    echo "  6) Setup — configure your agent (interactive)"
+    echo "  7) MCP config — print agent-ready MCP registration JSON"
+    echo "  8) MCP doctor — validate MCP server startup + tool registration"
+    echo "  9) Connect to OpenCode Proxy — route REA through opencode2api + WARP"
+    echo " 10) Analyze JavaScript Application — path to app dir / ASAR"
+    echo " 11) Update — update rea-agents to latest"
+    echo " 12) Help — show rea --help"
     echo "  0) Back to main menu"
     echo ""
     printf "  Select an option: "
@@ -1719,15 +2115,21 @@ handle_rea() {
         read -r rea_choice
         case "$rea_choice" in
             1) "$PROXY" rea status ; read -r -p "  Press Enter to continue..." _ ;;
-            2) "$PROXY" rea setup ; read -r -p "  Press Enter to continue..." _ ;;
-            3) "$PROXY" rea connect ; read -r -p "  Press Enter to continue..." _ ;;
-            4) read -r -p "  Enter path to JS/Electron app dir: " rea_path
+            2) "$PROXY" rea install ; read -r -p "  Press Enter to continue..." _ ;;
+            3) "$PROXY" rea uninstall ; read -r -p "  Press Enter to continue..." _ ;;
+            4) "$PROXY" rea node ; read -r -p "  Press Enter to continue..." _ ;;
+            5) "$PROXY" rea diagnostics ; read -r -p "  Press Enter to continue..." _ ;;
+            6) "$PROXY" rea setup ; read -r -p "  Press Enter to continue..." _ ;;
+            7) "$PROXY" rea mcp config ; read -r -p "  Press Enter to continue..." _ ;;
+            8) "$PROXY" rea mcp doctor ; read -r -p "  Press Enter to continue..." _ ;;
+            9) "$PROXY" rea connect ; read -r -p "  Press Enter to continue..." _ ;;
+            10) read -r -p "  Enter path to JS/Electron app dir: " rea_path
                if [ -n "$rea_path" ]; then
                    "$PROXY" rea analyze "$rea_path"
                fi
                read -r -p "  Press Enter to continue..." _ ;;
-            5) "$PROXY" rea update ; read -r -p "  Press Enter to continue..." _ ;;
-            6) "$PROXY" rea help ; read -r -p "  Press Enter to continue..." _ ;;
+            11) "$PROXY" rea update ; read -r -p "  Press Enter to continue..." _ ;;
+            12) "$PROXY" rea help ; read -r -p "  Press Enter to continue..." _ ;;
             0) break ;;
             *) echo "  Invalid option." ; sleep 1 ;;
         esac
@@ -2242,6 +2644,8 @@ def do_update():
 def do_uninstall():
     header("Uninstalling OpenCode UNLIMITED")
     stop_daemon()
+    # Remove the managed REA installation first.
+    uninstall_rea()
     for p in [PID_FILE, LOG_FILE, CONFIG_FILE, DAEMON_FILE, ENGINE_BIN,
               OPENCODE_BIN, OPENCODE_WRAPPER, MANAGER_FILE, OPENCODE_JSONC,
               OPENCODE_UNLIMITED]:
@@ -2392,7 +2796,8 @@ def do_install():
     info("Zoom:    'opencode-proxy zoom-in' | 'zoom-out' | 'zoom-reset'  (Termux font size)")
     info("Thinking: 'opencode-proxy thinking <mode>'  (low, medium, max — DeepThink for DeepSeek)")
     info("          'opencode-proxy thinking status'  (show current thinking indicator)")
-    info("REA:      'opencode-proxy rea {setup|analyze|update|help|status|connect}'  (Reverse Engineer Anything)")
+    info("REA:      'opencode-proxy rea {status|install|uninstall|setup|analyze|update|node|diagnostics|help|connect|mcp <config|doctor|start>}'  (Reverse Engineer Anything)")
+    info("          Node engine: 'opencode-proxy rea node'  (REA requires Node.js " + REA_NODE_ENGINES + ")")
     info("Rate-limit: 'opencode-proxy rate-limit'  (scan proxy logs for 429/rate-limit events)")
     info("Autostart:  'opencode-proxy autostart {enable|disable|status}'  (start proxy on device boot)")
 

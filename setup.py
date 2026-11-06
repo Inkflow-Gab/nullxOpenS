@@ -1169,7 +1169,7 @@ def do_thinking(mode=""):
     info(f"Current status: {thinking_indicator()}")
 
 
-def do_rea(subcmd="status", arg=""):
+def do_rea(subcmd="status", arg="", continue_flag=False):
     """Manage REA — Reverse Engineer Anything (morluto/rea).
 
     Subcommands:
@@ -1255,8 +1255,7 @@ def do_rea(subcmd="status", arg=""):
         return
 
     if subcmd == "start":
-        # arg holds --continue or empty
-        do_rea_start(arg)
+        do_rea_start(continue_flag)
         return
 
     if subcmd == "mcp":
@@ -1341,7 +1340,7 @@ exec rea "$@"
     info("Make sure the proxy is running: opencode-proxy start")
 
 
-def do_rea_start(cont=""):
+def do_rea_start(continue_flag=False):
     """Instantly connect REA to the OpenCode proxy and launch the CLI.
 
     Starts the proxy if needed, installs/connects REA, then launches
@@ -1406,14 +1405,12 @@ exec {rea_cmd} \"$@\"
         warn("OpenCode CLI binary not found. Install it first: opencode-proxy install")
         return
 
-    if cont.lower() == "--continue":
+    if continue_flag:
         info("Resuming previous OpenCode session with REA connected...")
-        import subprocess as _sp
-        _sp.run([str(OPENCODE_WRAPPER), "--continue"])
+        subprocess.run([str(OPENCODE_WRAPPER), "--continue"])
     else:
         info("Launching OpenCode CLI with REA connected...")
-        import subprocess as _sp
-        _sp.run([str(OPENCODE_WRAPPER)])
+        subprocess.run([str(OPENCODE_WRAPPER)])
 
 
 def do_rate_limit():
@@ -3043,6 +3040,8 @@ def main():
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
     ap.add_argument("skill_name", nargs="?", default="")
+    ap.add_argument("--continue", action="store_true", dest="continue_flag",
+                    default=False, help="resume previous session (used with rea start)")
     args = ap.parse_args()
     if args.action == "install":
         do_install()
@@ -3103,7 +3102,7 @@ def main():
     elif args.action == "thinking":
         do_thinking(args.model)
     elif args.action == "rea":
-        do_rea(args.model, args.archive)
+        do_rea(args.model, args.archive, args.continue_flag)
     elif args.action == "rate-limit":
         do_rate_limit()
     elif args.action == "autostart":

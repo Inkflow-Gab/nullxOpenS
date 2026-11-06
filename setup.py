@@ -93,7 +93,7 @@ PROVIDER = "opencode-unlimited-proxy"
 DEFAULT_MODEL = "deepseek-v4.1-flash-free"
 
 TERMUX_ONLY = {"termux-tools", "glibc-repo", "glibc-runner"}
-REQUIRED_PKGS = ["curl", "jq", "proot", "python"]
+REQUIRED_PKGS = ["curl", "python"]
 GLIBC_PKGS = ["glibc-repo", "glibc-runner"]
 
 GATEWAY_CONFIG = {
@@ -185,7 +185,7 @@ def packages_for(env):
     """Commands that have to be present for the given environment."""
     pkgs = list(REQUIRED_PKGS)
     if env == "termux":
-        pkgs += ["grun", "termux-chroot"]
+        pkgs += ["proot", "grun", "termux-chroot"]
     else:
         pkgs = [p for p in pkgs if p != "python"]
         pkgs.append("python3")
@@ -484,17 +484,85 @@ def do_config():
         warn("gateway config.json not found, run: opencode-proxy install")
 
 
+def command_dirs():
+    """Folders that are already on PATH, so the commands work right away.
+
+    ~/.local/bin is the home for the commands, but a fresh shell does not
+    always have it on PATH. Copying them into a system folder that is on
+    PATH avoids the "command not found" after the install.
+    """
+    dirs = []
+    prefix = os.environ.get("PREFIX")
+    if prefix:
+        termux_bin = Path(prefix) / "bin"
+        if termux_bin.is_dir():
+            dirs.append(termux_bin)
+    for raw in ("/usr/local/bin", "/usr/bin"):
+        path = Path(raw)
+        if path.is_dir() and os.access(path, os.W_OK):
+            dirs.append(path)
+    return dirs
+
+
+def install_script(path, content, marker):
+    """Write an executable script and copy it into every PATH folder.
+
+    A file that is not ours is never overwritten, so an opencode installed
+    by other means keeps working.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+    os.chmod(path, 0o755)
+
+    for extra in command_dirs():
+        target = extra / path.name
+        if target == path:
+            continue
+        if target.exists():
+            try:
+                ours = marker in target.read_text()
+            except OSError:
+                ours = False
+            if not ours:
+                warn(f"{target} belongs to something else, leaving it alone")
+                continue
+        try:
+            shutil.copy2(path, target)
+            info(f"also installed {target}")
+        except OSError as e:
+            warn(f"could not install {target}: {e}")
+
+
 def ensure_path():
     """Make sure ~/.local/bin is on PATH for future shells."""
     if str(LOCAL_BIN) not in os.environ.get("PATH", ""):
         os.environ["PATH"] = str(LOCAL_BIN) + os.pathsep + os.environ.get("PATH", "")
     line = f'export PATH="{LOCAL_BIN}:$PATH"'
-    if BASHRC.exists():
-        if ".local/bin" not in BASHRC.read_text():
-            with open(BASHRC, "a") as f:
-                f.write("\n" + line + "\n")
-    else:
-        BASHRC.write_text(line + "\n")
+
+    for rc in (BASHRC, HOME / ".profile", HOME / ".zshrc"):
+        if rc == HOME / ".zshrc" and not rc.exists():
+            continue
+        try:
+            content = rc.read_text() if rc.exists() else ""
+        except OSError:
+            continue
+        if ".local/bin" in content:
+            continue
+        try:
+            with open(rc, "a") as f:
+                f.write(f"\n{line}\n")
+        except OSError as e:
+            warn(f"could not update {rc}: {e}")
+
+
+def check_commands():
+    """Tell the user how to reach the commands if they are not on PATH."""
+    if which("opencode-unlimited"):
+        return True
+    warn("opencode-unlimited is not on PATH in this shell")
+    info(f"run this now: export PATH=\"{LOCAL_BIN}:$PATH\"")
+    info("or open a new terminal, the path is saved in ~/.bashrc and ~/.profile")
+    return False
 
 
 # --- downloads -------------------------------------------------------------
@@ -504,22 +572,26 @@ def download(url, dest):
     """Download url to dest with a single line of progress."""
     info(f"downloading {url}")
     shown = -1
-    with urllib.request.urlopen(url) as resp, open(dest, "wb") as f:
-        total = int(resp.headers.get("Content-Length", 0))
-        done = 0
-        while True:
-            chunk = resp.read(8192)
-            if not chunk:
-                break
-            f.write(chunk)
-            done += len(chunk)
-            if total:
-                percent = min(done * 100 / total, 100)
-                if percent - shown >= 1:
-                    shown = percent
-                    filled = int(30 * percent / 100)
-                    bar = "#" * filled + "." * (30 - filled)
-                    print(f"\r  [{bar}] {percent:5.1f}% ({done // 1024} KB)", end="", flush=True)
+    try:
+        with urllib.request.urlopen(url) as resp, open(dest, "wb") as f:
+            total = int(resp.headers.get("Content-Length", 0))
+            done = 0
+            while True:
+                chunk = resp.read(8192)
+                if not chunk:
+                    break
+                f.write(chunk)
+                done += len(chunk)
+                if total:
+                    percent = min(done * 100 / total, 100)
+                    if percent - shown >= 1:
+                        shown = percent
+                        filled = int(30 * percent / 100)
+                        bar = "#" * filled + "." * (30 - filled)
+                        print(f"\r  [{bar}] {percent:5.1f}% ({done // 1024} KB)", end="", flush=True)
+    except Exception as e:
+        Path(dest).unlink(missing_ok=True)
+        raise RuntimeError(f"could not download {url}: {e}") from e
     print()
     ok("download complete")
 
@@ -592,7 +664,13 @@ def install_opencode_cli(dry_run=False):
         if dry_run:
             return
         tmp = LOCAL_BIN / "opencode-cli.tgz"
-        download(CLI_URL, tmp)
+        try:
+            download(CLI_URL, tmp)
+        except Exception as e:
+            err(str(e))
+            info(f"get the file by hand from {CLI_URL}")
+            info(f"save the binary as {OPENCODE_BIN}")
+            return
         with tempfile.TemporaryDirectory() as td:
             extract_tar(tmp, td)
             binary = find_binary(td, "opencode")
@@ -618,7 +696,7 @@ def write_opencode_wrapper():
     else:
         launcher = f'exec "{OPENCODE_BIN}" "$@"'
 
-    OPENCODE_WRAPPER.write_text(f"""#!/usr/bin/env bash
+    install_script(OPENCODE_WRAPPER, f"""#!/usr/bin/env bash
 # OpenCode CLI wrapper. Passes every argument through to opencode-bin and
 # prints the current thinking mode before handing over.
 THINKING_MODE="$(python3 "$HOME/.opencode-proxy/setup.py" thinking status 2>/dev/null \
@@ -628,8 +706,7 @@ echo "OpenCode UNLIMITED  ${{THINKING_MODE:-thinking: off}}"
 echo "api: {API_URL}/v1"
 echo
 {launcher}
-""")
-    os.chmod(OPENCODE_WRAPPER, 0o755)
+""", "# OpenCode CLI wrapper")
 
 
 # --- daemon ----------------------------------------------------------------
@@ -960,6 +1037,9 @@ def do_doctor():
     checks.append(("opencode cli binary", "present" if OPENCODE_BIN.exists() else "missing", OPENCODE_BIN.exists()))
     checks.append(("opencode wrapper", "present" if OPENCODE_WRAPPER.exists() else "missing", OPENCODE_WRAPPER.exists()))
 
+    on_path = bool(which("opencode-unlimited"))
+    checks.append(("commands on PATH", "found" if on_path else f"not in PATH, use {LOCAL_BIN}", on_path))
+
     checks.append(("gateway config", "present" if CONFIG_FILE.exists() else "missing", CONFIG_FILE.exists()))
 
     routed = False
@@ -974,6 +1054,24 @@ def do_doctor():
 
     healthy = health_ok()
     checks.append(("gateway health", "online" if healthy else "offline", healthy))
+
+    if healthy:
+        try:
+            health = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=3).read().decode())
+            warp = health.get("warp", {})
+            checks.append((
+                "warp egress",
+                f"{warp.get('status', '?')} (active {warp.get('active', '?')}, standby {warp.get('standby', '?')})",
+                warp.get("status") not in ("error", "failed"),
+            ))
+            models = health.get("models", {})
+            checks.append((
+                "free models",
+                f"{models.get('exposed', '?')} of {models.get('total', '?')} upstream",
+                bool(models.get("exposed")),
+            ))
+        except Exception:
+            pass
 
     checks.append(("thinking mode", thinking_indicator(), True))
 
@@ -999,6 +1097,9 @@ def do_doctor():
     if not routed:
         info("repoint OpenCode at the proxy: python3 setup.py install")
         info("or inspect the current config: opencode-proxy config")
+    if not on_path:
+        info("put the commands back on PATH: opencode-proxy repair")
+        info(f"or in this shell: export PATH=\"{LOCAL_BIN}:$PATH\"")
 
 
 def do_validate():
@@ -1229,6 +1330,12 @@ MANAGER_SH = r"""#!/usr/bin/env bash
 # opencode-proxy - control the gateway and the OpenCode CLI.
 SETUP="$HOME/.opencode-proxy/setup.py"
 
+if [ ! -f "$SETUP" ]; then
+    echo "setup.py is missing from $HOME/.opencode-proxy"
+    echo "reinstall it with: curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3"
+    exit 1
+fi
+
 case "$1" in
     start)     python3 "$SETUP" start ;;
     stop)      python3 "$SETUP" stop ;;
@@ -1258,7 +1365,7 @@ case "$1" in
     rate-limit) python3 "$SETUP" rate-limit ;;
     autostart) python3 "$SETUP" autostart "${2:-}" ;;
     *)
-        echo "usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}}"
+        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}}"
         exit 1
         ;;
 esac
@@ -1269,18 +1376,43 @@ UNLIMITED_SH = r"""#!/usr/bin/env bash
 # Run without arguments for the menu, or with start/stop/restart/status.
 BASE_DIR="$HOME/.opencode-proxy"
 LOCAL_BIN="$HOME/.local/bin"
-PROXY="$LOCAL_BIN/opencode-proxy"
-CLI="$LOCAL_BIN/opencode"
+SETUP="$BASE_DIR/setup.py"
+
+if [ ! -f "$SETUP" ]; then
+    echo "setup.py is missing from $BASE_DIR"
+    echo "reinstall it with: curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3"
+    exit 1
+fi
+
+# Fall back to whatever is on PATH when the local copy is gone.
+if [ -x "$LOCAL_BIN/opencode-proxy" ]; then
+    PROXY="$LOCAL_BIN/opencode-proxy"
+elif command -v opencode-proxy >/dev/null 2>&1; then
+    PROXY="$(command -v opencode-proxy)"
+else
+    echo "the opencode-proxy command is missing, run: opencode-proxy repair"
+    exit 1
+fi
+
+if [ -x "$LOCAL_BIN/opencode" ]; then
+    CLI="$LOCAL_BIN/opencode"
+elif command -v opencode >/dev/null 2>&1; then
+    CLI="$(command -v opencode)"
+else
+    CLI="$LOCAL_BIN/opencode"
+fi
 
 proxy_healthy() {
     curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1
 }
 
 wait_for_proxy() {
-    for _ in $(seq 1 15); do
+    local i=0
+    while [ "$i" -lt 15 ]; do
         if proxy_healthy; then
             return 0
         fi
+        i=$((i + 1))
         sleep 1
     done
     return 1
@@ -1315,7 +1447,7 @@ start_opencode() {
 }
 
 show_menu() {
-    clear
+    command -v clear >/dev/null 2>&1 && clear
     echo
     echo "OpenCode UNLIMITED"
     echo
@@ -1337,7 +1469,7 @@ show_menu() {
 }
 
 models_menu() {
-    clear
+    command -v clear >/dev/null 2>&1 && clear
     echo
     echo "Models"
     echo
@@ -1357,11 +1489,11 @@ if [ $# -gt 0 ]; then
             ;;
         stop)
             "$PROXY" stop
-            pkill -f "opencode-bin" 2>/dev/null || true
+            command -v pkill >/dev/null 2>&1 && pkill -f "opencode-bin" 2>/dev/null
             ;;
         restart)
             "$PROXY" stop
-            pkill -f "opencode-bin" 2>/dev/null || true
+            command -v pkill >/dev/null 2>&1 && pkill -f "opencode-bin" 2>/dev/null
             sleep 1
             "$PROXY" start
             if wait_for_proxy; then
@@ -1374,7 +1506,7 @@ if [ $# -gt 0 ]; then
             ;;
         status)
             "$PROXY" status
-            if pgrep -f "opencode-bin" >/dev/null 2>&1; then
+            if command -v pgrep >/dev/null 2>&1 && pgrep -f "opencode-bin" >/dev/null 2>&1; then
                 echo "OpenCode CLI: running"
             else
                 echo "OpenCode CLI: stopped"
@@ -1398,8 +1530,8 @@ while true; do
     case "$choice" in
         1) start_opencode "" ; exit 0 ;;
         2) start_opencode "--continue" ; exit 0 ;;
-        3) "$PROXY" stop ; pkill -f "opencode-bin" 2>/dev/null || true ;;
-        4) "$PROXY" stop ; pkill -f "opencode-bin" 2>/dev/null || true ; sleep 1 ; "$PROXY" start ;;
+        3) "$PROXY" stop ; command -v pkill >/dev/null 2>&1 && pkill -f "opencode-bin" 2>/dev/null ;;
+        4) "$PROXY" stop ; command -v pkill >/dev/null 2>&1 && pkill -f "opencode-bin" 2>/dev/null ; sleep 1 ; "$PROXY" start ;;
         5) "$PROXY" status ;;
         6)
             while true; do
@@ -1453,6 +1585,7 @@ while true; do
             ;;
         11) "$PROXY" doctor ;;
         12) "$PROXY" rate-limit ;;
+        13) python3 "$BASE_DIR/setup.py" repair ;;
         0) exit 0 ;;
         *) echo "  unknown option" ;;
     esac
@@ -1463,19 +1596,25 @@ done
 
 def write_manager():
     """Write ~/.local/bin/opencode-proxy."""
-    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
-    MANAGER_FILE.write_text(MANAGER_SH)
-    os.chmod(MANAGER_FILE, 0o755)
+    install_script(MANAGER_FILE, MANAGER_SH, "# opencode-proxy - control the gateway")
 
 
 def write_unlimited_launcher():
     """Write ~/.local/bin/opencode-unlimited."""
-    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
-    OPENCODE_UNLIMITED.write_text(UNLIMITED_SH)
-    os.chmod(OPENCODE_UNLIMITED, 0o755)
+    install_script(OPENCODE_UNLIMITED, UNLIMITED_SH, "# OpenCode UNLIMITED - starts the gateway")
 
 
 # --- install ---------------------------------------------------------------
+
+
+def step(label, func, *args, **kwargs):
+    """Run one install step. A failure is reported, it does not abort the rest."""
+    try:
+        func(*args, **kwargs)
+        return True
+    except Exception as e:
+        err(f"{label} failed: {e}")
+        return False
 
 
 def do_install():
@@ -1496,20 +1635,67 @@ def do_install():
         except Exception:
             warn("could not download setup.py")
 
-    install_packages()
-    install_engine()
-    write_config()
-    write_manager()
-    write_unlimited_launcher()
-    install_opencode_cli()
-    write_opencode_config(force=True)
-    ensure_path()
+    failed = []
+    if not step("installing dependencies", install_packages):
+        failed.append("dependencies")
+    if not step("installing the gateway", install_engine):
+        failed.append("gateway")
+    if not step("writing the configuration", write_config):
+        failed.append("configuration")
+    if not step("writing the commands", write_manager):
+        failed.append("commands")
+    if not step("writing the launcher", write_unlimited_launcher):
+        failed.append("launcher")
+    if not step("installing the OpenCode CLI", install_opencode_cli):
+        failed.append("OpenCode CLI")
+    if not step("writing the OpenCode configuration", write_opencode_config, True):
+        failed.append("OpenCode configuration")
+    step("setting PATH", ensure_path)
 
     section("setup complete")
-    ok("run 'opencode-unlimited' to start the gateway and the CLI together")
-    info("or start them separately: opencode-proxy start, then opencode")
-    info("check the install: opencode-proxy doctor")
-    info("models: opencode-proxy models list")
+    if failed:
+        warn("these steps did not finish: " + ", ".join(failed))
+        info("fix the cause and run: opencode-proxy repair")
+    else:
+        ok("run 'opencode-unlimited' to start the gateway and the CLI together")
+        info("or start them separately: opencode-proxy start, then opencode")
+        info("check the install: opencode-proxy doctor")
+        info("models: opencode-proxy models list")
+    if not which("git"):
+        info("git is not installed, it is only needed to clone or update from GitHub")
+    check_commands()
+
+
+def do_repair():
+    """Rewrite everything the commands need and put them back on PATH.
+
+    Use this when a command is missing, the config was overwritten or the
+    install was interrupted. Nothing is downloaded unless a binary is gone.
+    """
+    section("repairing")
+    BASE_DIR.mkdir(parents=True, exist_ok=True)
+
+    local_copy = Path(__file__).resolve()
+    if local_copy.is_file():
+        shutil.copy2(local_copy, BASE_DIR / "setup.py")
+
+    if not ENGINE_BIN.exists():
+        step("installing the gateway", install_engine)
+    if not validate_opencode_bin():
+        step("installing the OpenCode CLI", install_opencode_cli)
+    else:
+        step("writing the wrapper", write_opencode_wrapper)
+
+    step("writing the configuration", write_config)
+    step("writing the commands", write_manager)
+    step("writing the launcher", write_unlimited_launcher)
+    step("writing the OpenCode configuration", write_opencode_config, True)
+    step("setting PATH", ensure_path)
+
+    ok("the commands and the configuration were rewritten")
+    if not health_ok():
+        info("the gateway is not running, start it with: opencode-proxy start")
+    check_commands()
 
 
 def do_install_dry_run():
@@ -1521,8 +1707,8 @@ def do_install_dry_run():
 
 
 ACTIONS = [
-    "install", "start", "stop", "restart", "status", "test", "bench", "logs",
-    "update", "uninstall", "backup", "restore", "watchdog", "version",
+    "install", "repair", "start", "stop", "restart", "status", "test", "bench",
+    "logs", "update", "uninstall", "backup", "restore", "watchdog", "version",
     "validate", "dry-run", "models", "model", "config", "doctor", "continue",
     "fix-dns", "zoom-in", "zoom-out", "zoom-reset", "thinking", "rate-limit",
     "autostart",
@@ -1539,6 +1725,8 @@ def main():
     action = args.action
     if action == "install":
         do_install()
+    elif action == "repair":
+        do_repair()
     elif action == "start":
         start_daemon()
     elif action == "stop":

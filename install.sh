@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/usr/bin/env bash
 # Bootstrap installer for OpenCode UNLIMITED.
 #
 # Installs the packages the setup needs and then hands over to setup.py,
@@ -23,9 +23,9 @@ fi
 say "OpenCode UNLIMITED installer" "$BLUE"
 
 if command -v apt-get >/dev/null 2>&1; then
-    PACKAGES="curl jq proot python3"
+    PACKAGES="curl python3"
 else
-    PACKAGES="curl jq proot python"
+    PACKAGES="curl python proot"
 fi
 
 MISSING=""
@@ -67,4 +67,6 @@ fi
 say "Running setup.py install" "$BLUE"
 python3 "$BASE_DIR/setup.py" install
 
-say "Done. Start it with: opencode-unlimited" "$GREEN"
+say "Done." "$GREEN"
+say "Start it with: opencode-unlimited"
+say "If that is not found, run: export PATH=\"\$HOME/.local/bin:\$PATH\""

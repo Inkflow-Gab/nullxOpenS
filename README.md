@@ -1,38 +1,52 @@
 # OpenCode UNLIMITED
 
-OpenCode UNLIMITED installs and controls the [opencode2api](https://github.com/jasonxu114514/opencode2api)
-gateway and the OpenCode CLI on Android (Termux). The gateway rotates through
-Cloudflare WARP IPv6 exits, so the free tier of OpenCode does not run out of
-requests because every request leaves the device from a different address.
+> A local proxy for the OpenCode free tier. Cloudflare WARP rotates the exit
+> IP on every request, so the quota never runs out.
+> Termux, ARM64, no root, no Docker, no server of your own.
 
-No root, no Docker, no server of your own.
+```bash
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
+opencode-unlimited
+```
 
-## Requirements
+That is the whole install. The rest of this page is what you get, how to fix
+things when they break, and what else the proxy is good for.
 
-- An ARM64 Android device (`aarch64`)
-- Termux, or a Linux distro running under `proot-distro`
-- Around 300 MB of free space for the gateway, the CLI and their dependencies
+---
 
-## Installation
+## What you get
 
-### One command
+| | |
+|---|---|
+| Gateway | `opencode2api` v1.4.6 on `http://127.0.0.1:8080/v1` |
+| Dashboard | `http://127.0.0.1:8081` |
+| Egress | Cloudflare WARP IPv6, rotates on every 429/403 |
+| CLI | OpenCode CLI 1.19.5, wired to the proxy for you |
+| Commands | `opencode-unlimited` (menu) and `opencode-proxy` (scriptable) |
+
+Requirements: an ARM64 Android device, Termux or a distro under `proot-distro`,
+and about 300 MB of free space.
+
+---
+
+## Install
+
+**One command** (works on Termux and inside proot-distro):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
 ```
 
-### From a clone
+**From a clone** (needs `git`):
 
 ```bash
+apt-get install -y git
 git clone https://github.com/Inkflow-Gab/nullxOpenS.git
 cd nullxOpenS
 python3 setup.py install
 ```
 
-### With the bootstrap script
-
-`install.sh` installs the missing packages first and then hands over to
-`setup.py`:
+**With the bootstrap script** (installs the missing packages first):
 
 ```bash
 git clone https://github.com/Inkflow-Gab/nullxOpenS.git
@@ -40,126 +54,125 @@ cd nullxOpenS
 bash install.sh
 ```
 
-### Inside proot-distro
+Inside proot-distro the installer uses `apt-get`, on Termux it uses `pkg`.
+Both are detected automatically.
 
-The installer detects `apt-get` and switches to it, so the same command works
-inside Ubuntu under `proot-distro`:
-
-```bash
-proot-distro login ubuntu
-apt update && apt install -y python3 curl
-curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
-```
-
-### What the installer does
-
-1. Installs the missing packages (`curl`, `jq`, `proot`, `python`, and on
-   Termux `glibc-runner` plus `termux-tools`)
-2. Downloads the `opencode2api` gateway into `~/.opencode-proxy/bin`
-3. Downloads the OpenCode CLI into `~/.local/bin/opencode-bin`
-4. Writes the gateway config to `~/.opencode-proxy/config.json`
-5. Writes `~/.config/opencode/opencode.jsonc` so OpenCode talks to the local
-   gateway instead of the free tier directly
-6. Writes the `opencode-proxy` and `opencode-unlimited` commands into
-   `~/.local/bin` and adds that folder to `PATH` in `~/.bashrc`
-
-## Checking the install
+### Check it
 
 ```bash
 opencode-proxy doctor
-```
-
-Every line is either `ok` or `FAIL`. If the gateway is not online yet, start it:
-
-```bash
-opencode-proxy start
 opencode-proxy status
 ```
 
-The API is then reachable at `http://127.0.0.1:8080/v1` and the dashboard at
-`http://127.0.0.1:8081`.
-
-## Usage
-
-### The launcher
+Every line in the doctor output is either `ok` or `FAIL`. Start the gateway
+if it is not running yet:
 
 ```bash
-opencode-unlimited
+opencode-proxy start
 ```
 
-Without arguments it opens a menu: start the proxy and the CLI together,
-resume the last session, switch models, change the thinking mode, adjust the
-terminal font, fix DNS, toggle auto start, run the doctor, or read the rate
-limit log.
+---
 
-The same thing works with arguments:
+## The two commands
+
+`opencode-unlimited` runs the menu, or takes `start`, `start --continue`,
+`stop`, `restart`, `status`.
+
+`opencode-proxy` is the scriptable one:
+
+| Command | What it does |
+|---------|--------------|
+| `start` / `stop` / `restart` | Control the gateway |
+| `status` | Gateway, WARP state, exposed models |
+| `test [model]` | One test request through the gateway |
+| `bench [model]` | Time to the first token |
+| `models list` / `models best` | The free models |
+| `model <model-id>` | Change the default model |
+| `thinking <mode>` | Reasoning effort: `low` `medium` `high` `max` `none` |
+| `thinking status` | Show the current effort |
+| `doctor` | Check the whole install |
+| `repair` | Rewrite the commands and the config, put them back on PATH |
+| `fix-dns` | Point `/etc/resolv.conf` at 1.1.1.1 and 8.8.8.8 |
+| `rate-limit` | Scan the log for 429 and quota events |
+| `logs` | Last lines of the gateway log |
+| `autostart enable\|disable\|status` | Start on device boot |
+| `config` | Print the OpenCode configuration |
+| `backup` / `restore` | Save and restore the configs |
+| `version` / `validate` | Versions and config check |
+| `uninstall` | Remove everything the installer wrote |
+
+---
+
+## If something is wrong
+
+Run this first, it repairs the commands, the config and the PATH:
 
 ```bash
-opencode-unlimited start
-opencode-unlimited start --continue
-opencode-unlimited stop
-opencode-unlimited restart
-opencode-unlimited status
+opencode-proxy repair
 ```
 
-### The proxy command
+Then work down the table:
 
-| Command | Description |
-|---------|-------------|
-| `opencode-proxy start` | Start the gateway in the background |
-| `opencode-proxy stop` | Stop the gateway |
-| `opencode-proxy restart` | Stop and start the gateway again |
-| `opencode-proxy status` | Show the gateway, the WARP state and the model count |
-| `opencode-proxy test [model]` | Send a test request through the gateway |
-| `opencode-proxy bench [model]` | Measure the time to the first token |
-| `opencode-proxy logs` | Print the last lines of the gateway log |
-| `opencode-proxy models list` | List the free models with their context size |
-| `opencode-proxy models best` | Show the three best models |
-| `opencode-proxy model <model-id>` | Change the default model |
-| `opencode-proxy thinking <mode>` | Set the reasoning effort |
-| `opencode-proxy thinking status` | Show the current reasoning effort |
-| `opencode-proxy config` | Print the current OpenCode configuration |
-| `opencode-proxy doctor` | Check the whole install |
-| `opencode-proxy fix-dns` | Point `/etc/resolv.conf` at 1.1.1.1 and 8.8.8.8 |
-| `opencode-proxy rate-limit` | Scan the log for 429 and quota events |
-| `opencode-proxy autostart enable` | Start the proxy when the device boots |
-| `opencode-proxy autostart disable` | Stop starting it on boot |
-| `opencode-proxy autostart status` | Show the auto start state |
-| `opencode-proxy backup` | Save the configs into a tarball |
-| `opencode-proxy restore [file]` | Restore a backup |
-| `opencode-proxy update` | Download the latest `setup.py` |
-| `opencode-proxy uninstall` | Remove everything the installer wrote |
-| `opencode-proxy version` | Show the installed versions |
+| Symptom | Do this |
+|---------|---------|
+| `opencode-unlimited: command not found` | `export PATH="$HOME/.local/bin:$PATH"`, then `opencode-proxy repair`. The commands are also copied into `/usr/local/bin` (or `$PREFIX/bin` on Termux), so a new terminal usually fixes it. |
+| `git: command not found` | `apt-get install -y git`. Only needed to clone or update, the proxy does not need it. |
+| `bash: install.sh: No such file or directory` | You are not in the cloned folder. Run `ls`, then `cd nullxOpenS`. Or skip the clone and use the one command install. |
+| `proxy is stopped` | `opencode-proxy start`, then `opencode-proxy status` |
+| Gateway starts but never goes online | `opencode-proxy fix-dns` then `opencode-proxy restart`. Inside proot-distro the resolver is often `127.0.0.1`, which WARP cannot use. |
+| Still `Free usage exceeded` | OpenCode is bypassing the proxy. `opencode-proxy doctor` must show `opencode.jsonc routes through the proxy` as `ok`. |
+| The CLI does not start on Termux | `pkg install glibc-repo glibc-runner`, the CLI needs glibc. |
+| The download failed during install | The installer keeps going and tells you the URL. Download it by hand and save it to `~/.opencode-proxy/bin/opencode2api`. |
+| Want a clean slate | `opencode-proxy uninstall` then `python3 setup.py install` |
 
-### Thinking mode
-
-DeepSeek and the other reasoning models accept a reasoning effort. It is stored
-in `~/.config/opencode/opencode.jsonc` and picked up the next time OpenCode
-starts:
+The log always tells you what the gateway was doing:
 
 ```bash
-opencode-proxy thinking low
-opencode-proxy thinking medium
-opencode-proxy thinking max
-opencode-proxy thinking none
-opencode-proxy thinking status
+opencode-proxy logs
+opencode-proxy rate-limit
 ```
 
-### Auto start on boot
+---
 
-Needs the Termux boot app:
+## Beyond OpenCode
+
+The gateway is a plain OpenAI compatible API. Anything that speaks
+`/v1/chat/completions` can use it, not just the OpenCode CLI.
 
 ```bash
-opencode-proxy autostart enable
-opencode-proxy autostart status
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer local-test-key" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4.1-flash-free","messages":[{"role":"user","content":"hello"}]}'
 ```
 
-The script is written to `~/.termux/boot/opencode-proxy-start.sh`.
+Point a client at it:
 
-## Free models
+| Client | What to enter |
+|--------|---------------|
+| Cline, Roo Code, Continue | Provider: OpenAI compatible, base URL `http://127.0.0.1:8080/v1`, key `local-test-key` |
+| Aider | `OPENAI_API_BASE=http://127.0.0.1:8080/v1 OPENAI_API_KEY=local-test-key` |
+| Cursor, Zed, Windsurf | Custom OpenAI provider, same base URL and key |
+| Open WebUI, LibreChat, AnythingLLM, LobeChat | OpenAI connection, same base URL and key |
+| Python SDK | `OpenAI(base_url="http://127.0.0.1:8080/v1", api_key="local-test-key")` |
+| Node SDK | `new OpenAI({ baseURL: "http://127.0.0.1:8080/v1", apiKey: "local-test-key" })` |
 
-The gateway exposes the free tier of OpenCode through the proxy. The ones the
-installer knows about:
+What that buys you:
+
+- **Run every request through WARP**, so the free tier of any client stops
+  running out, not just OpenCode.
+- **Use it as a backend for your own scripts**: summarise logs, translate
+  release notes, triage errors, generate fixtures, feed a bot.
+- **Compare models** with `opencode-proxy bench <model>` before picking one.
+- **Watch the traffic** on the dashboard at `http://127.0.0.1:8081`.
+- **Reach it from another device** by forwarding the port, for example
+  `adb forward tcp:8080 tcp:8080`, then use `http://127.0.0.1:8080/v1` on the
+  other machine. The gateway listens on localhost only, keep it that way
+  unless you know what you are exposing.
+
+---
+
+## Models
 
 | Model | Good for | Context |
 |-------|----------|---------|
@@ -174,52 +187,10 @@ installer knows about:
 | `flint-40b-free` | Open weight models | 128K |
 | `mimo-v2.6-flash-free` | Small, quick assistant | 128K |
 
-The gateway refreshes the list itself, so `opencode-proxy models list` can
-show more than what is written here.
+The gateway refreshes this list on its own, `opencode-proxy models list`
+shows what is live right now.
 
-## Troubleshooting
-
-**"Free usage exceeded" or other rate limits**
-
-OpenCode is most likely talking to the upstream directly instead of through
-the gateway:
-
-```bash
-opencode-proxy status      # the gateway has to be online
-opencode-proxy doctor      # "opencode.jsonc routes through the proxy" has to be ok
-opencode-proxy config      # baseURL should be http://127.0.0.1:8080/v1
-opencode-proxy test deepseek-v4.1-flash-free
-```
-
-Always start OpenCode through `opencode-unlimited` or `opencode-proxy` so the
-requests leave through WARP.
-
-**The gateway starts but never comes online**
-
-WARP needs a working resolver. Inside proot-distro `/etc/resolv.conf` often
-points at `127.0.0.1`, which the userspace WARP client cannot use:
-
-```bash
-opencode-proxy fix-dns
-opencode-proxy restart
-```
-
-**The OpenCode CLI does not start on Termux**
-
-The CLI is a glibc binary and needs the runner:
-
-```bash
-pkg install glibc-repo glibc-runner
-```
-
-After that `opencode-proxy doctor` should show `package grun` as installed.
-
-**Check the log**
-
-```bash
-opencode-proxy logs
-opencode-proxy rate-limit
-```
+---
 
 ## Files
 
@@ -228,7 +199,7 @@ opencode-proxy rate-limit
 | `~/.opencode-proxy/config.json` | Gateway configuration |
 | `~/.opencode-proxy/proxy.log` | Gateway log |
 | `~/.opencode-proxy/proxy.pid` | PID of the running gateway |
-| `~/.opencode-proxy/backups/` | Backups made by `opencode-proxy backup` |
+| `~/.opencode-proxy/backups/` | Backups from `opencode-proxy backup` |
 | `~/.config/opencode/opencode.jsonc` | OpenCode configuration |
 | `~/.local/bin/opencode-proxy` | The gateway command |
 | `~/.local/bin/opencode-unlimited` | The launcher |
@@ -240,9 +211,9 @@ opencode-proxy rate-limit
 opencode-proxy uninstall
 ```
 
-It stops the gateway and removes the files listed above, including the
-generated `opencode.jsonc`. Make a backup first with
-`opencode-proxy backup` if you want to keep it.
+It stops the gateway and removes the files above, including the generated
+`opencode.jsonc`. Take a backup first with `opencode-proxy backup` if you
+want to keep it.
 
 ## Credits
 

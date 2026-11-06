@@ -34,6 +34,9 @@ Built and maintained by **null** 🛠️
 - **Model management** — switch, bench, and detect free models
 - **Diagnostics** — `doctor` command checks your whole setup
 - **REA (Reverse Engineer Anything)** — `opencode-proxy rea {setup|analyze|update|help|status}` via morluto/rea (npm global)
+- **Skills backup** — `skills export` / `skills import` to share skill collections between devices
+- **Rate-limit monitor** — `rate-limit` scans proxy logs for 429 / usage-exceeded events
+- **Auto-start** — `autostart {enable|disable|status}` launches proxy on device boot
 - No Docker, no root, no external server required
 
 ---
@@ -95,6 +98,8 @@ opencode
 | `opencode-proxy zoom-reset` | Reset terminal font size to default |
 | `opencode-proxy thinking <mode>` | Set model thinking mode (low, medium, max) |
 | `opencode-proxy rea {setup|analyze|update|help|status}` | REA — Reverse Engineer Anything (morluto/rea) |
+| `opencode-proxy rate-limit` | Scan proxy logs for 429 / rate-limit events |
+| `opencode-proxy autostart {enable|disable|status}` | Start proxy automatically on device boot |
 | `opencode` | Launch OpenCode CLI TUI |
 | `opencode-unlimited start` | Start proxy + launch CLI together |
 | `opencode-unlimited start --continue` | Start proxy + resume previous OpenCode session |
@@ -114,6 +119,8 @@ opencode
 | `opencode-proxy skills show <name>` | Show skill details & system prompt |
 | `opencode-proxy skills add <name>` | Create a custom skill |
 | `opencode-proxy skills remove <name>` | Remove a skill |
+| `opencode-proxy skills export <file>` | Export all skills to a backup JSON file |
+| `opencode-proxy skills import <file>` | Import skills from a backup JSON file |
 | `opencode-proxy apply-skill <name>` | Apply a skill's system prompt to OpenCode config |
 
 ### Models ⚡
@@ -440,6 +447,28 @@ REA connects your agent to local inspection tools. Ask your agent: *"Understand 
 - For native binary analysis: an existing Hopper, Ghidra, IDA, or Kuna installation (optional)
 
 More: [morluto/rea](https://github.com/morluto/rea) · [rea.tools](https://rea.tools/)
+
+## Rate-Limit Monitor 📊
+
+Scan proxy logs for 429 / rate-limit / "usage exceeded" events:
+
+```bash
+opencode-proxy rate-limit
+```
+
+Shows total events, recent occurrences, and which models are most affected — plus actionable suggestions (fix DNS, switch model, restart proxy).
+
+## Auto-Start on Boot 🔌
+
+Configure the proxy to start automatically when your Android device boots (requires Termux with termux-boot app):
+
+```bash
+opencode-proxy autostart enable    # start proxy on boot
+opencode-proxy autostart disable   # stop auto-starting
+opencode-proxy autostart status    # check current state
+```
+
+When enabled, a script is created at `~/.termux/boot/opencode-proxy-start.sh` that launches the proxy and OpenCode CLI on boot.
 
 ## Credits 🏅
 

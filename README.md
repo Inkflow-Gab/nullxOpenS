@@ -33,7 +33,7 @@ Built and maintained by **null** 🛠️
 - **Skill system** — 400+ skills from alirezarezvani/claude-skills (search, categories, apply-skill, sync, add/remove)
 - **Model management** — switch, bench, and detect free models
 - **Diagnostics** — `doctor` command checks your whole setup
-- **REA (Reverse Engineer Anything)** — `opencode-proxy rea {setup|analyze|update|help|status}` via morluto/rea (npm global)
+- **REA (Reverse Engineer Anything)** — `opencode-proxy rea {setup|analyze|update|help|status|connect}` via morluto/rea (npm global)
 - **Skills backup** — `skills export` / `skills import` to share skill collections between devices
 - **Rate-limit monitor** — `rate-limit` scans proxy logs for 429 / usage-exceeded events
 - **Auto-start** — `autostart {enable|disable|status}` launches proxy on device boot
@@ -122,7 +122,7 @@ opencode
 | `opencode-proxy zoom-out` | Decrease terminal font size (Termux) |
 | `opencode-proxy zoom-reset` | Reset terminal font size to default |
 | `opencode-proxy thinking <mode>` | Set model thinking mode (low, medium, max) |
-| `opencode-proxy rea {setup|analyze|update|help|status}` | REA — Reverse Engineer Anything (morluto/rea) |
+| `opencode-proxy rea {setup|analyze|update|help|status|connect}` | REA — Reverse Engineer Anything + connect to OpenCode proxy |
 | `opencode-proxy rate-limit` | Scan proxy logs for 429 / rate-limit events |
 | `opencode-proxy autostart {enable|disable|status}` | Start proxy automatically on device boot |
 | `opencode` | Launch OpenCode CLI TUI |
@@ -448,9 +448,33 @@ It's installed globally via npm as part of `opencode-proxy install` (`npm instal
 |---------|-------------|
 | `opencode-proxy rea status` | Check rea installation + version |
 | `opencode-proxy rea setup` | Configure your agent with REA (interactive) |
+| `opencode-proxy rea connect` | Connect REA to OpenCode proxy (127.0.0.1:8080/v1) |
 | `opencode-proxy rea analyze <path>` | Analyze a JS/Electron app dir or ASAR (`--json`) |
 | `opencode-proxy rea update` | Update rea-agents to latest |
 | `opencode-proxy rea help` | Show `rea --help` |
+
+### Connect REA to OpenCode Unlimited Proxy
+
+Run `opencode-proxy rea connect` to create a wrapper script at
+`~/.local/bin/rea-unlimited` that routes REA's LLM calls through OpenCode
+UNLIMITED's `opencode2api` gateway with WARP IPv6 rotation:
+
+```bash
+# 1. Start the proxy first
+opencode-proxy start
+
+# 2. Connect REA to the proxy
+opencode-proxy rea connect
+
+# 3. Use REA through the proxy (all LLM calls go through WARP)
+rea-unlimited analyze-javascript-application /path/to/app --json
+```
+
+The wrapper sets:
+- `OPENAI_BASE_URL=http://127.0.0.1:8080/v1`
+- `OPENAI_API_KEY=local-test-key`
+- `OPENAI_MODEL=deepseek-v4.1-flash-free`
+- `REA_MODEL=deepseek-v4.1-flash-free`
 
 ### Examples
 
@@ -458,8 +482,11 @@ It's installed globally via npm as part of `opencode-proxy install` (`npm instal
 # Set up REA with your agent (Claude Code, Codex, Cursor, etc.)
 opencode-proxy rea setup
 
-# Analyze an extracted Electron/JS app directory
-opencode-proxy rea analyze /path/to/app --json
+# Connect REA to OpenCode proxy for unlimited LLM access
+opencode-proxy rea connect
+
+# Analyze an extracted Electron/JS app directory (through proxy)
+rea-unlimited analyze-javascript-application /path/to/app --json
 
 # Keep REA up to date
 opencode-proxy rea update

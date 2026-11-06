@@ -22,29 +22,39 @@ RED = "\033[0;31m"
 GREEN = "\033[0;32m"
 YELLOW = "\033[0;33m"
 BLUE = "\033[0;34m"
+MAGENTA = "\033[0;35m"
+CYAN = "\033[0;36m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 NC = "\033[0m"
 
 
 def info(msg):
-    print(f"{BLUE}->{NC} {msg}")
+    print(f"  {BLUE}->{NC} {msg}")
 
 
 def ok(msg):
-    print(f"{GREEN}ok{NC} {msg}")
+    print(f"  {GREEN}ok{NC} {msg}")
 
 
 def warn(msg):
-    print(f"{YELLOW}warning:{NC} {msg}")
+    print(f"  {YELLOW}!!{NC} {msg}")
 
 
 def err(msg):
-    print(f"{RED}error:{NC} {msg}")
+    print(f"  {RED}xx{NC} {msg}")
 
 
-def section(msg):
-    print(f"\n{BOLD}{msg}{NC}")
+def section(title, subtitle=""):
+    print()
+    print(f"  {BOLD}{CYAN}{title}{NC}")
+    if subtitle:
+        print(f"  {DIM}{subtitle}{NC}")
+
+
+def pair(label, value):
+    """A dim label with a value, used for the status blocks."""
+    print(f"  {DIM}{label:<10}{NC} {value}")
 
 
 def which(cmd):
@@ -200,10 +210,14 @@ def required_packages(env):
             needed += GLIBC_PKGS
         if not which("termux-chroot"):
             needed.append("termux-tools")
+        if find_ca_bundle() is None:
+            needed.append("ca-certificates")
     else:
         needed = [p for p in needed if p != "python"]
         if not which("python3"):
             needed.append("python3")
+        if find_ca_bundle() is None:
+            needed.append("ca-certificates")
     return needed
 
 
@@ -254,6 +268,97 @@ def install_packages(dry_run=False):
             err(f"package install had issues: {e}, continuing anyway")
 
     ok("dependencies installed")
+
+
+CA_BUNDLES = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/cert.pem",
+]
+
+# Folders with PEM certificates, used when there is no single bundle file.
+CA_DIRS = [
+    "/etc/ssl/certs",
+    "/system/etc/security/cacerts",
+]
+
+
+def find_ca_bundle():
+    """The CA bundle of this system, None when there is none."""
+    candidates = list(CA_BUNDLES)
+    prefix = os.environ.get("PREFIX")
+    if prefix:
+        candidates.append(f"{prefix}/etc/ssl/certs/ca-certificates.crt")
+    for raw in candidates:
+        path = Path(raw)
+        try:
+            if path.is_file() and path.stat().st_size > 1000:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def find_ca_dir():
+    """A folder with PEM certificates, None when there is none."""
+    candidates = list(CA_DIRS)
+    prefix = os.environ.get("PREFIX")
+    if prefix:
+        candidates.append(f"{prefix}/etc/ssl/certs")
+    for raw in candidates:
+        path = Path(raw)
+        try:
+            if not path.is_dir():
+                continue
+            if any(path.glob("*.pem")) or any(path.glob("*.0")):
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def fix_certs():
+    """Make sure a CA bundle exists.
+
+    A container without ca-certificates cannot verify the Cloudflare
+    certificate and the WARP device never comes up.
+    """
+    bundle = find_ca_bundle()
+    if bundle:
+        return bundle
+
+    info("no CA bundle found, installing ca-certificates")
+    try:
+        if detect_env() == "termux":
+            run(["pkg", "install", "-y", "ca-certificates"], check=False)
+        else:
+            run(["apt-get", "update", "-y"], check=False)
+            run(["apt-get", "install", "-y", "ca-certificates"], check=False)
+            run(["update-ca-certificates"], check=False)
+    except Exception as e:
+        warn(f"could not install ca-certificates: {e}")
+    return find_ca_bundle()
+
+
+def do_fix_certs():
+    """Install or refresh the CA bundle the gateway needs."""
+    section("fixing certificates")
+    bundle = find_ca_bundle()
+    if bundle:
+        ok(f"CA bundle ready: {bundle}")
+        pair("size", f"{bundle.stat().st_size} bytes")
+    else:
+        bundle = fix_certs()
+        if bundle:
+            ok(f"CA bundle installed: {bundle}")
+        else:
+            err("no CA bundle could be installed")
+            info("inside proot-distro run: apt-get update && apt-get install -y ca-certificates")
+            return
+
+    if not health_ok():
+        info("restart the gateway: opencode-proxy restart")
 
 
 def fix_dns():
@@ -626,7 +731,13 @@ def install_engine(dry_run=False):
         return
 
     tmp = BASE_DIR / "opencode2api.tar.gz"
-    download(ENGINE_URL, tmp)
+    try:
+        download(ENGINE_URL, tmp)
+    except Exception as e:
+        err(str(e))
+        info(f"get the file by hand from {ENGINE_URL}")
+        info(f"save the binary as {ENGINE_BIN}")
+        return
     with tempfile.TemporaryDirectory() as td:
         extract_tar(tmp, td)
         binary = find_binary(td, "opencode2api")
@@ -699,11 +810,16 @@ def write_opencode_wrapper():
     install_script(OPENCODE_WRAPPER, f"""#!/usr/bin/env bash
 # OpenCode CLI wrapper. Passes every argument through to opencode-bin and
 # prints the current thinking mode before handing over.
+BOLD='\\033[1m'
+DIM='\\033[2m'
+CYAN='\\033[0;36m'
+NC='\\033[0m'
+
 THINKING_MODE="$(python3 "$HOME/.opencode-proxy/setup.py" thinking status 2>/dev/null \
-| sed 's/\\x1b\\[[0-9;]*m//g' | grep -i 'thinking:' | head -1)"
+| grep 'thinking:' | head -1 | sed 's/^ *//')"
 echo
-echo "OpenCode UNLIMITED  ${{THINKING_MODE:-thinking: off}}"
-echo "api: {API_URL}/v1"
+printf "  ${{BOLD}}${{CYAN}}OpenCode UNLIMITED${{NC}}  %s\n" "${{THINKING_MODE:-thinking: off}}"
+printf "  ${{DIM}}api  {API_URL}/v1${{NC}}\n"
 echo
 {launcher}
 """, "# OpenCode CLI wrapper")
@@ -754,11 +870,21 @@ def start_daemon(dry_run=False):
         return
 
     fix_dns()
+    bundle = fix_certs()
 
     if detect_env() == "termux":
         cmd = ["termux-chroot", str(ENGINE_BIN), "-config", str(CONFIG_FILE)]
+        env = os.environ.copy()
+        if bundle:
+            env["SSL_CERT_FILE"] = str(bundle)
     else:
         cmd = [str(ENGINE_BIN), "-config", str(CONFIG_FILE)]
+        env = os.environ.copy()
+        if bundle:
+            env["SSL_CERT_FILE"] = str(bundle)
+        cert_dir = find_ca_dir()
+        if cert_dir:
+            env["SSL_CERT_DIR"] = str(cert_dir)
 
     pid = os.fork()
     if pid > 0:
@@ -787,7 +913,7 @@ def start_daemon(dry_run=False):
         f.write(str(os.getpid()))
 
     try:
-        os.execv(cmd[0], cmd)
+        os.execve(cmd[0], cmd, env)
     except Exception as e:
         sys.stderr.write(f"could not start {cmd[0]}: {e}\n")
         os._exit(1)
@@ -986,10 +1112,9 @@ def do_models(subcmd="list"):
         return
 
     print()
-    print(f"  {BOLD}{'model':<35} {'context':<10} best for{NC}")
-    print(f"  {BOLD}{'-' * 35} {'-' * 10} {'-' * 30}{NC}")
+    print(f"  {DIM}{'model':<35} {'context':<9} best for{NC}")
     for name, meta in sorted(MODEL_INFO.items(), key=lambda kv: kv[1]["rank"]):
-        print(f"  {GREEN}{name:<35}{NC} {BLUE}{meta['ctx']:<10}{NC} {meta['use']}")
+        print(f"  {GREEN}{name:<35}{NC} {BLUE}{meta['ctx']:<9}{NC} {meta['use']}")
     print()
     info("switch the default model: opencode-proxy model <model-id>")
 
@@ -1016,6 +1141,30 @@ def do_model(name=""):
 
 
 # --- diagnostics -----------------------------------------------------------
+
+
+def log_problem():
+    """Name the failure the gateway logged, with the command that fixes it."""
+    if not LOG_FILE.exists():
+        return None
+    try:
+        text = LOG_FILE.read_text(errors="replace")[-20000:]
+    except OSError:
+        return None
+
+    if "certificate signed by unknown authority" in text or "x509:" in text:
+        return ("the gateway could not verify the Cloudflare certificate",
+                "run: opencode-proxy fix-certs")
+    if "no such host" in text or "server misbehaving" in text:
+        return ("the gateway cannot resolve the Cloudflare servers",
+                "run: opencode-proxy fix-dns")
+    if "/dev/net/tun" in text:
+        return ("the WARP device needs a tun interface",
+                "check that /dev/net/tun exists on the device")
+    if "connection refused" in text or "i/o timeout" in text:
+        return ("the gateway cannot reach the upstream",
+                "run: opencode-proxy fix-dns, then opencode-proxy restart")
+    return None
 
 
 def do_doctor():
@@ -1053,7 +1202,8 @@ def do_doctor():
     checks.append(("opencode.jsonc routes through the proxy", "routed" if routed else "not routed", routed))
 
     healthy = health_ok()
-    checks.append(("gateway health", "online" if healthy else "offline", healthy))
+    bundle = find_ca_bundle()
+    checks.append(("ca certificates", str(bundle) if bundle else "missing", bundle is not None))
 
     if healthy:
         try:
@@ -1077,15 +1227,25 @@ def do_doctor():
 
     failed = []
     for name, status, good in checks:
-        print(f"  {'ok ' if good else 'FAIL'}  {name}: {status}")
+        if good:
+            marker = f"{GREEN}ok{NC}"
+            value = f"{status}"
+        else:
+            marker = f"{RED}xx{NC}"
+            value = f"{RED}{status}{NC}"
+        print(f"  {marker}  {name:<40} {value}")
         if not good:
             failed.append(name)
 
     print()
     if failed:
         warn(f"{len(failed)} check(s) failed")
+        problem = log_problem()
+        if problem:
+            err(problem[0])
+            info(problem[1])
     else:
-        ok("all checks passed")
+        ok("everything checks out")
 
     if not ENGINE_BIN.exists():
         info("install the gateway: python3 setup.py install")
@@ -1100,6 +1260,8 @@ def do_doctor():
     if not on_path:
         info("put the commands back on PATH: opencode-proxy repair")
         info(f"or in this shell: export PATH=\"{LOCAL_BIN}:$PATH\"")
+    if bundle is None:
+        info("install the CA bundle the gateway needs: opencode-proxy fix-certs")
 
 
 def do_validate():
@@ -1358,6 +1520,7 @@ case "$1" in
     doctor)    python3 "$SETUP" doctor ;;
     continue)  python3 "$SETUP" continue ;;
     fix-dns)   python3 "$SETUP" fix-dns ;;
+    fix-certs) python3 "$SETUP" fix-certs ;;
     zoom-in)   python3 "$SETUP" zoom-in ;;
     zoom-out)  python3 "$SETUP" zoom-out ;;
     zoom-reset) python3 "$SETUP" zoom-reset ;;
@@ -1365,7 +1528,7 @@ case "$1" in
     rate-limit) python3 "$SETUP" rate-limit ;;
     autostart) python3 "$SETUP" autostart "${2:-}" ;;
     *)
-        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}}"
+        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|fix-certs|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}}"
         exit 1
         ;;
 esac
@@ -1377,6 +1540,13 @@ UNLIMITED_SH = r"""#!/usr/bin/env bash
 BASE_DIR="$HOME/.opencode-proxy"
 LOCAL_BIN="$HOME/.local/bin"
 SETUP="$BASE_DIR/setup.py"
+
+BOLD='\033[1m'
+DIM='\033[2m'
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
 if [ ! -f "$SETUP" ]; then
     echo "setup.py is missing from $BASE_DIR"
@@ -1402,6 +1572,10 @@ else
     CLI="$LOCAL_BIN/opencode"
 fi
 
+item() {
+    printf "  ${GREEN}%2s${NC}  %s\n" "$1" "$2"
+}
+
 proxy_healthy() {
     curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1
 }
@@ -1418,14 +1592,16 @@ wait_for_proxy() {
     return 1
 }
 
+thinking_mode() {
+    python3 "$SETUP" thinking status 2>/dev/null | grep 'thinking:' | head -1 | sed 's/^ *//'
+}
+
 show_banner() {
     local title="$1"
-    local mode
-    mode="$(python3 "$BASE_DIR/setup.py" thinking status 2>/dev/null \
-        | sed 's/\x1b\[[0-9;]*m//g' | grep -i 'thinking:' | head -1)"
     echo
-    echo "$title  ${mode:-thinking: off}"
-    echo "api: http://127.0.0.1:8080/v1"
+    printf "  ${BOLD}${CYAN}%s${NC}  %s\n" "$title" "$(thinking_mode)"
+    printf "  ${DIM}api  http://127.0.0.1:8080/v1${NC}\n"
+    printf "  ${DIM}dash http://127.0.0.1:8081${NC}\n"
     echo
 }
 
@@ -1434,7 +1610,7 @@ start_opencode() {
     if ! proxy_healthy; then
         "$PROXY" start
         if ! wait_for_proxy; then
-            echo "[!] the proxy did not come up, check 'opencode-proxy logs'"
+            echo "  ${YELLOW}the proxy did not come up, check 'opencode-proxy logs'${NC}"
             return 1
         fi
     fi
@@ -1449,37 +1625,40 @@ start_opencode() {
 show_menu() {
     command -v clear >/dev/null 2>&1 && clear
     echo
-    echo "OpenCode UNLIMITED"
+    printf "  ${BOLD}${CYAN}OpenCode UNLIMITED${NC}\n"
+    printf "  ${DIM}free models through a rotating WARP exit${NC}\n"
     echo
-    echo "  1) Start"
-    echo "  2) Start and resume the last session"
-    echo "  3) Stop the proxy and the CLI"
-    echo "  4) Restart the proxy and the CLI"
-    echo "  5) Status"
-    echo "  6) Models"
-    echo "  7) Thinking mode"
-    echo "  8) Terminal font size"
-    echo "  9) Fix DNS"
-    echo " 10) Auto start on boot"
-    echo " 11) Doctor"
-    echo " 12) Rate limit monitor"
-    echo "  0) Quit"
+    item 1  "Start"
+    item 2  "Start and resume the last session"
+    item 3  "Stop the proxy and the CLI"
+    item 4  "Restart the proxy and the CLI"
+    item 5  "Status"
+    item 6  "Models"
+    item 7  "Thinking mode"
+    item 8  "Terminal font size"
+    item 9  "Fix DNS"
+    item 10 "Fix certificates"
+    item 11 "Auto start on boot"
+    item 12 "Doctor"
+    item 13 "Rate limit monitor"
+    item 14 "Repair the install"
+    item 0  "Quit"
     echo
-    printf "  pick a number: "
+    printf "  ${BOLD}pick a number:${NC} "
 }
 
 models_menu() {
     command -v clear >/dev/null 2>&1 && clear
     echo
-    echo "Models"
+    printf "  ${BOLD}${CYAN}Models${NC}\n"
     echo
-    echo "  1) List the free models"
-    echo "  2) Show the three best models"
-    echo "  3) Switch the default model"
-    echo "  4) Benchmark a model"
-    echo "  0) Back"
+    item 1 "List the free models"
+    item 2 "Show the three best models"
+    item 3 "Switch the default model"
+    item 4 "Benchmark a model"
+    item 0 "Back"
     echo
-    printf "  pick a number: "
+    printf "  ${BOLD}pick a number:${NC} "
 }
 
 if [ $# -gt 0 ]; then
@@ -1500,20 +1679,20 @@ if [ $# -gt 0 ]; then
                 show_banner "OpenCode UNLIMITED"
                 exec "$CLI"
             else
-                echo "[!] the proxy did not come up, check 'opencode-proxy logs'"
+                echo "  ${YELLOW}the proxy did not come up, check 'opencode-proxy logs'${NC}"
                 exit 1
             fi
             ;;
         status)
             "$PROXY" status
             if command -v pgrep >/dev/null 2>&1 && pgrep -f "opencode-bin" >/dev/null 2>&1; then
-                echo "OpenCode CLI: running"
+                printf "  ${GREEN}ok${NC}  OpenCode CLI is running\n"
             else
-                echo "OpenCode CLI: stopped"
+                printf "  ${DIM}xx  OpenCode CLI is stopped${NC}\n"
             fi
             ;;
         install)
-            python3 "$BASE_DIR/setup.py" install
+            python3 "$SETUP" install
             ;;
         *)
             echo "usage: opencode-unlimited {start [--continue]|stop|restart|status|install}"
@@ -1540,18 +1719,28 @@ while true; do
                 case "$model_choice" in
                     1) "$PROXY" models list ;;
                     2) "$PROXY" models best ;;
-                    3) read -r -p "  model id: " name ; "$PROXY" model "$name" ;;
-                    4) read -r -p "  model id: " name ; "$PROXY" bench "$name" ;;
+                    3) read -r -p "  ${BOLD}model id:${NC} " name ; "$PROXY" model "$name" ;;
+                    4) read -r -p "  ${BOLD}model id:${NC} " name ; "$PROXY" bench "$name" ;;
                     0) break ;;
                     *) echo "  unknown option" ;;
                 esac
-                read -r -p "  press enter to go back... " _
+                read -r -p "  ${DIM}press enter to go back...${NC} " _
             done
             ;;
         7)
             echo
-            echo "  1) Status   2) low   3) medium   4) high   5) max   6) off   0) Back"
-            read -r -p "  pick a number: " think_choice
+            printf "  ${BOLD}${CYAN}Thinking mode${NC}  %s\n" "$(thinking_mode)"
+            echo
+            item 1 "Status"
+            item 2 "low"
+            item 3 "medium"
+            item 4 "high"
+            item 5 "max"
+            item 6 "off"
+            item 0 "Back"
+            echo
+            printf "  ${BOLD}pick a number:${NC} "
+            read -r think_choice
             case "$think_choice" in
                 1) "$PROXY" thinking status ;;
                 2) "$PROXY" thinking low ;;
@@ -1563,33 +1752,47 @@ while true; do
             ;;
         8)
             echo
-            echo "  1) Bigger   2) Smaller   3) Reset   0) Back"
-            read -r -p "  pick a number: " zoom_choice
+            printf "  ${BOLD}${CYAN}Terminal font size${NC}\n"
+            echo
+            item 1 "Bigger"
+            item 2 "Smaller"
+            item 3 "Reset"
+            item 0 "Back"
+            echo
+            printf "  ${BOLD}pick a number:${NC} "
+            read -r zoom_choice
             case "$zoom_choice" in
                 1) "$PROXY" zoom-in ;;
                 2) "$PROXY" zoom-out ;;
                 3) "$PROXY" zoom-reset ;;
             esac
-            read -r -p "  press enter to go back... " _
             ;;
         9) "$PROXY" fix-dns ;;
-        10)
+        10) "$PROXY" fix-certs ;;
+        11)
             echo
-            echo "  1) Status   2) Enable   3) Disable   0) Back"
-            read -r -p "  pick a number: " boot_choice
+            printf "  ${BOLD}${CYAN}Auto start on boot${NC}\n"
+            echo
+            item 1 "Status"
+            item 2 "Enable"
+            item 3 "Disable"
+            item 0 "Back"
+            echo
+            printf "  ${BOLD}pick a number:${NC} "
+            read -r boot_choice
             case "$boot_choice" in
                 1) "$PROXY" autostart status ;;
                 2) "$PROXY" autostart enable ;;
                 3) "$PROXY" autostart disable ;;
             esac
             ;;
-        11) "$PROXY" doctor ;;
-        12) "$PROXY" rate-limit ;;
-        13) python3 "$BASE_DIR/setup.py" repair ;;
+        12) "$PROXY" doctor ;;
+        13) "$PROXY" rate-limit ;;
+        14) python3 "$SETUP" repair ;;
         0) exit 0 ;;
         *) echo "  unknown option" ;;
     esac
-    read -r -p "  press enter to go back... " _
+    read -r -p "  ${DIM}press enter to go back...${NC} " _
 done
 """
 
@@ -1710,8 +1913,8 @@ ACTIONS = [
     "install", "repair", "start", "stop", "restart", "status", "test", "bench",
     "logs", "update", "uninstall", "backup", "restore", "watchdog", "version",
     "validate", "dry-run", "models", "model", "config", "doctor", "continue",
-    "fix-dns", "zoom-in", "zoom-out", "zoom-reset", "thinking", "rate-limit",
-    "autostart",
+    "fix-dns", "fix-certs", "zoom-in", "zoom-out", "zoom-reset", "thinking",
+    "rate-limit", "autostart",
 ]
 
 
@@ -1769,6 +1972,8 @@ def main():
         do_continue()
     elif action == "fix-dns":
         do_fix_dns()
+    elif action == "fix-certs":
+        do_fix_certs()
     elif action == "zoom-in":
         do_zoom(2)
     elif action == "zoom-out":

@@ -23,9 +23,9 @@ fi
 say "OpenCode UNLIMITED installer" "$BLUE"
 
 if command -v apt-get >/dev/null 2>&1; then
-    PACKAGES="curl python3"
+    PACKAGES="curl python3 ca-certificates"
 else
-    PACKAGES="curl python proot"
+    PACKAGES="curl python proot ca-certificates"
 fi
 
 MISSING=""

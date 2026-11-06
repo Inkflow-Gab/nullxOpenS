@@ -445,9 +445,72 @@ def do_skills(subcmd="list", name=""):
         skill_file.unlink()
         success(f"Removed skill '{name}'")
 
+    elif subcmd == "export":
+        if not name:
+            error("Usage: opencode-proxy skills export <file.json>")
+            info("Example: opencode-proxy skills export my-skills-backup.json")
+            return
+        export_path = Path(name)
+        if not export_path.suffix:
+            export_path = export_path.with_suffix(".json")
+        skill_files = sorted(SKILLS_DIR.glob("*.json"))
+        if not skill_files:
+            warn("No skills installed to export.")
+            return
+        bundle = {
+            "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "source": "alirezarezvani/claude-skills",
+            "total": len(skill_files),
+            "skills": [],
+        }
+        for sf in skill_files:
+            try:
+                skill = json.loads(sf.read_text())
+                bundle["skills"].append(skill)
+            except Exception:
+                pass
+        export_path.write_text(json.dumps(bundle, indent=2))
+        success(f"Exported {len(bundle['skills'])} skills to {export_path}")
+        info("Use: opencode-proxy skills import <file.json>  (to restore on another device)")
+
+    elif subcmd == "import":
+        if not name:
+            error("Usage: opencode-proxy skills import <file.json>")
+            info("Example: opencode-proxy skills import my-skills-backup.json")
+            return
+        import_path = Path(name)
+        if not import_path.exists():
+            error(f"File not found: {import_path}")
+            return
+        try:
+            bundle = json.loads(import_path.read_text())
+        except json.JSONDecodeError as e:
+            error(f"Invalid JSON: {e}")
+            return
+        skills_list = bundle.get("skills", [])
+        if not skills_list:
+            warn("No skills found in bundle.")
+            return
+        SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+        imported = 0
+        skipped = 0
+        for skill in skills_list:
+            sname = skill.get("name", "")
+            if not sname:
+                skipped += 1
+                continue
+            skill_file = SKILLS_DIR / f"{sname}.json"
+            if skill_file.exists():
+                skipped += 1
+                continue
+            skill_file.write_text(json.dumps(skill, indent=2))
+            imported += 1
+        success(f"Imported {imported} skills (skipped {skipped} already installed).")
+        info(f"Total skills now: {len(list(SKILLS_DIR.glob('*.json')))}")
+
     else:
         error(f"Unknown skills subcommand: {subcmd}")
-        info("Usage: opencode-proxy skills {list|install|sync|search|categories|show|add|remove|apply-skill} [name]")
+        info("Usage: opencode-proxy skills {list|install|sync|search|categories|show|add|remove|apply-skill|export|import} [name|file]")
 
 
 def write_opencode_config_with_skill(system_prompt: str, skill_name: str):
@@ -816,8 +879,10 @@ case "$1" in
     zoom-reset) python3 "$SETUP" zoom-reset ;;
     thinking) python3 "$SETUP" thinking "${2:-}" ;;
     rea) python3 "$SETUP" rea "${2:-}" "${3:-}" ;;
+    rate-limit) python3 "$SETUP" rate-limit ;;
+    autostart) python3 "$SETUP" autostart "${2:-}" ;;
     install) python3 "$SETUP" install ;;
-    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill] [name]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rea {setup|analyze|update|help|status} [path]}"; exit 1 ;;
+    *) echo "Usage: opencode-proxy {install|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|skills [list|install|sync|search|categories|show|add|remove|apply-skill|export|import] [name|file]|models [list|best]|model <name>|config|doctor|sync|apply-skill <name>|continue|fix-dns|zoom-in|zoom-out|zoom-reset|thinking <mode>|rea {setup|analyze|update|help|status} [path]|rate-limit|autostart {enable|disable|status}}"; exit 1 ;;
 esac
 """
 
@@ -1145,6 +1210,103 @@ def do_rea(subcmd="status", arg=""):
 
     error(f"Unknown rea subcommand: {subcmd}")
     info("Usage: opencode-proxy rea {setup|analyze|update|help|status} [path]")
+
+
+def do_rate_limit():
+    """Scan proxy logs for rate-limit / 429 events and show stats."""
+    header("Rate-Limit Monitor")
+    if not LOG_FILE.exists():
+        warn(f"No log file at {LOG_FILE}")
+        info("Start the proxy first: opencode-proxy start")
+        return
+    try:
+        lines = LOG_FILE.read_text(errors="replace").splitlines()
+    except Exception as e:
+        error(f"Cannot read log file: {e}")
+        return
+    total = len(lines)
+    rate_limited = []
+    models_affected = {}
+    for line in lines:
+        low = line.lower()
+        if "429" in low or "rate limit" in low or "usage exceeded" in low or "quota" in low:
+            rate_limited.append(line)
+            # try to extract a model name
+            for mname in MODEL_INFO:
+                if mname in line:
+                    models_affected[mname] = models_affected.get(mname, 0) + 1
+                    break
+    info(f"Total log lines scanned: {total}")
+    info(f"Rate-limit / 429 events: {len(rate_limited)}")
+    if rate_limited:
+        print(f"\n  {RED}Recent events:{NC}")
+        for line in rate_limited[-5:]:
+            print(f"    {DIM}{line[:120]}{NC}")
+        if models_affected:
+            print(f"\n  {CYAN}Models affected:{NC}")
+            for mname, count in sorted(models_affected.items(), key=lambda x: -x[1]):
+                print(f"    {GREEN}{mname}{NC}: {count} events")
+        print(f"\n  {YELLOW}Suggestions:{NC}")
+        info("  - Run: opencode-proxy fix-dns  (if DNS/WARP is blocked)")
+        info("  - Switch model: opencode-proxy model <another-free-model>")
+        info("  - Restart proxy: opencode-proxy restart")
+    else:
+        success("No rate-limit events found in logs.")
+
+
+def do_autostart(action=""):
+    """Configure auto-start of the proxy on device boot (Termux termux-boot)."""
+    header("Auto-Start on Boot")
+    termux_boot = Path.home() / ".termux" / "boot"
+    start_script = termux_boot / "opencode-proxy-start.sh"
+
+    if not action:
+        error("Usage: opencode-proxy autostart {enable|disable|status}")
+        info("")
+        if start_script.exists():
+            info("Status: ENABLED — proxy starts on boot")
+            print(f"  Script: {start_script}")
+        else:
+            info("Status: DISABLED — proxy does not start on boot")
+        info("")
+        info("Enable:  opencode-proxy autostart enable")
+        info("Disable: opencode-proxy autostart disable")
+        return
+
+    action = action.lower()
+    if action == "status":
+        if start_script.exists():
+            success("Auto-start: ENABLED")
+            print(f"  Script: {start_script}")
+        else:
+            info("Auto-start: DISABLED")
+        return
+
+    if action == "enable":
+        termux_boot.mkdir(parents=True, exist_ok=True)
+        script_content = f"""#!/data/data/com.termux/files/usr/bin/bash
+# Auto-start OpenCode UNLIMITED proxy on boot
+sleep 10
+{HOME}/.local/bin/opencode-proxy start >/dev/null 2>&1 &
+{HOME}/.local/bin/opencode-unlimited start --continue >/dev/null 2>&1 &
+"""
+        start_script.write_text(script_content)
+        os.chmod(start_script, 0o755)
+        success("Auto-start ENABLED — proxy will start on device boot")
+        info("Script: " + str(start_script))
+        info("Note: Requires Termux with termux-boot app installed.")
+        return
+
+    if action == "disable":
+        if start_script.exists():
+            start_script.unlink()
+            success("Auto-start DISABLED")
+        else:
+            info("Auto-start was already disabled.")
+        return
+
+    error(f"Unknown autostart action: {action}")
+    info("Usage: opencode-proxy autostart {enable|disable|status}")
 
 
 def do_zoom_in():
@@ -1982,6 +2144,8 @@ def do_install():
     info("Thinking: 'opencode-proxy thinking <mode>'  (low, medium, max — DeepThink for DeepSeek)")
     info("          'opencode-proxy thinking status'  (show current thinking indicator)")
     info("REA:      'opencode-proxy rea {setup|analyze|update|help|status}'  (Reverse Engineer Anything)")
+    info("Rate-limit: 'opencode-proxy rate-limit'  (scan proxy logs for 429/rate-limit events)")
+    info("Autostart:  'opencode-proxy autostart {enable|disable|status}'  (start proxy on device boot)")
 
 
 def main():
@@ -1994,7 +2158,7 @@ def main():
                              "model", "config", "doctor", "sync",
                              "apply-skill", "continue", "fix-dns",
                              "zoom-in", "zoom-out", "zoom-reset",
-                             "thinking", "rea"],
+                             "thinking", "rea", "rate-limit", "autostart"],
                     default="install")
     ap.add_argument("model", nargs="?", default="deepseek-v4.1-flash-free")
     ap.add_argument("archive", nargs="?", default="")
@@ -2060,6 +2224,10 @@ def main():
         do_thinking(args.model)
     elif args.action == "rea":
         do_rea(args.model, args.archive)
+    elif args.action == "rate-limit":
+        do_rate_limit()
+    elif args.action == "autostart":
+        do_autostart(args.model)
 
 
 if __name__ == "__main__":

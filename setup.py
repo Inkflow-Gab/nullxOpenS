@@ -1566,12 +1566,14 @@ def write_manager():
 
 # ── Unified launcher ──
 UNLIMITED_SH = """#!/usr/bin/env bash
-# OpenCode UNLIMITED — unified launcher
+# OpenCode UNLIMITED — interactive menu launcher
 # Starts the proxy daemon + OpenCode CLI together as one service.
+# Run with no args for the interactive menu; command-line flags still work.
 BASE_DIR="$HOME/.opencode-proxy"
 LOCAL_BIN="$HOME/.local/bin"
 PROXY="$LOCAL_BIN/opencode-proxy"
 CLI="$LOCAL_BIN/opencode"
+SETUP="$BASE_DIR/setup.py"
 
 wait_for_proxy() {
     for i in $(seq 1 15); do
@@ -1583,66 +1585,249 @@ wait_for_proxy() {
     return 1
 }
 
-case "$1" in
-    start)
-        # Start proxy only if it's not already healthy
-        if ! curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+start_opencode() {
+    local cont="$1"
+    # Start proxy only if it's not already healthy
+    if ! curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+        "$PROXY" start
+        if ! wait_for_proxy; then
+            echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+            return 1
+        fi
+    fi
+    # Show thinking indicator banner before launching OpenCode CLI
+    THINKING_MODE="$(python3 "$BASE_DIR/setup.py" thinking status 2>/dev/null | grep -oP '(thinking:\\s*.*)' | head -1 || echo '○ thinking: off')"
+    echo ""
+    echo "═════════════════════════════════════════════════════════════════════"
+    echo "  OpenCode UNLIMITED"
+    echo "  $THINKING_MODE"
+    echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
+    echo "═════════════════════════════════════════════════════════════════════"
+    echo ""
+    if [ "$cont" = "--continue" ]; then
+        exec "$CLI" --continue
+    else
+        exec "$CLI"
+    fi
+}
+
+show_main_menu() {
+    clear
+    echo ""
+    echo "╔═════════════════════════════════════════════════════════════════════╗"
+    echo "║              OpenCode UNLIMITED — Main Menu                        ║"
+    echo "╚═════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  1) REA — Reverse Engineer Anything"
+    echo "  2) OpenCode Unlimited — Start / Continue"
+    echo "  3) Doctor — System Diagnostics"
+    echo "  4) Rate-Limit Monitor — Check 429 / usage-exceeded events"
+    echo "  5) Model Thinking — Set reasoning mode (low/medium/max)"
+    echo "  6) Skills Management — list / search / export / import"
+    echo "  7) Model Management — list / switch / bench"
+    echo "  8) Terminal Zoom — in / out / reset"
+    echo "  9) Fix DNS — WARP DNS fix (1.1.1.1, 8.8.8.8)"
+    echo " 10) Auto-Start — enable / disable / status"
+    echo "  0) Exit"
+    echo ""
+    printf "  Select an option: "
+}
+
+show_rea_menu() {
+    clear
+    echo ""
+    echo "╔═════════════════════════════════════════════════════════════════════╗"
+    echo "║              REA — Reverse Engineer Anything                       ║"
+    echo "╚═════════════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  1) Status — check rea installation + version"
+    echo "  2) Setup — configure your agent (interactive)"
+    echo "  3) Analyze JavaScript Application — path to app dir / ASAR"
+    echo "  4) Update — update rea-agents to latest"
+    echo "  5) Help — show rea --help"
+    echo "  0) Back to main menu"
+    echo ""
+    printf "  Select an option: "
+}
+
+handle_rea() {
+    while true; do
+        show_rea_menu
+        read -r rea_choice
+        case "$rea_choice" in
+            1) "$PROXY" rea status ; read -r -p "  Press Enter to continue..." _ ;;
+            2) "$PROXY" rea setup ; read -r -p "  Press Enter to continue..." _ ;;
+            3) read -r -p "  Enter path to JS/Electron app dir: " rea_path
+               if [ -n "$rea_path" ]; then
+                   "$PROXY" rea analyze "$rea_path"
+               fi
+               read -r -p "  Press Enter to continue..." _ ;;
+            4) "$PROXY" rea update ; read -r -p "  Press Enter to continue..." _ ;;
+            5) "$PROXY" rea help ; read -r -p "  Press Enter to continue..." _ ;;
+            0) break ;;
+            *) echo "  Invalid option." ; sleep 1 ;;
+        esac
+    done
+}
+
+handle_opencode_unlimited() {
+    while true; do
+        clear
+        echo ""
+        echo "╔═════════════════════════════════════════════════════════════════════╗"
+        echo "║              OpenCode Unlimited — Start / Continue                 ║"
+        echo "╚═════════════════════════════════════════════════════════════════════╝"
+        echo ""
+        echo "  1) Start (normal)"
+        echo "  2) Start --continue (resume previous session)"
+        echo "  3) Stop proxy + CLI"
+        echo "  4) Restart proxy + CLI"
+        echo "  5) Status"
+        echo "  0) Back to main menu"
+        echo ""
+        printf "  Select an option: "
+        read -r oc_choice
+        case "$oc_choice" in
+            1) start_opencode "" ; break ;;
+            2) start_opencode "--continue" ; break ;;
+            3) "$PROXY" stop ; pkill -f "opencode-bin" 2>/dev/null || true ; read -r -p "  Press Enter to continue..." _ ;;
+            4) "$PROXY" stop ; pkill -f "opencode-bin" 2>/dev/null || true ; sleep 1
+               "$PROXY" start
+               if wait_for_proxy; then
+                   THINKING_MODE="$(python3 "$BASE_DIR/setup.py" thinking status 2>/dev/null | grep -oP '(thinking:\\s*.*)' | head -1 || echo '○ thinking: off')"
+                   echo ""
+                   echo "═════════════════════════════════════════════════════════════════════"
+                   echo "  OpenCode UNLIMITED (restarted)"
+                   echo "  $THINKING_MODE"
+                   echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
+                   echo "═════════════════════════════════════════════════════════════════════"
+                   echo ""
+                   exec "$CLI"
+               else
+                   echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+                   read -r -p "  Press Enter to continue..." _
+               fi
+               ;;
+            5) "$PROXY" status ; read -r -p "  Press Enter to continue..." _ ;;
+            0) break ;;
+            *) echo "  Invalid option." ; sleep 1 ;;
+        esac
+    done
+}
+
+# ── Command-line mode (backward compatibility) ──
+if [ $# -gt 0 ]; then
+    case "$1" in
+        start)
+            if ! curl -s "http://127.0.0.1:8080/healthz" >/dev/null 2>&1; then
+                "$PROXY" start
+                if ! wait_for_proxy; then
+                    echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+                    exit 1
+                fi
+            fi
+            THINKING_MODE="$(python3 "$BASE_DIR/setup.py" thinking status 2>/dev/null | grep -oP '(thinking:\\s*.*)' | head -1 || echo '○ thinking: off')"
+            echo ""
+            echo "═════════════════════════════════════════════════════════════════════"
+            echo "  OpenCode UNLIMITED"
+            echo "  $THINKING_MODE"
+            echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
+            echo "═════════════════════════════════════════════════════════════════════"
+            echo ""
+            if [ "$2" = "--continue" ]; then
+                exec "$CLI" --continue
+            else
+                exec "$CLI"
+            fi
+            ;;
+        stop)
+            "$PROXY" stop
+            pkill -f "opencode-bin" 2>/dev/null || true
+            ;;
+        restart)
+            "$PROXY" stop
+            pkill -f "opencode-bin" 2>/dev/null || true
+            sleep 1
             "$PROXY" start
-            if ! wait_for_proxy; then
+            if wait_for_proxy; then
+                exec "$CLI"
+            else
                 echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
                 exit 1
             fi
-        fi
-        # Show thinking indicator banner before launching OpenCode CLI
-        THINKING_MODE="$(python3 "$BASE_DIR/setup.py" thinking status 2>/dev/null | grep -oP '(thinking:\\s*.*)' | head -1 || echo '○ thinking: off')"
-        echo ""
-        echo "═════════════════════════════════════════════════════════════════════"
-        echo "  OpenCode UNLIMITED"
-        echo "  $THINKING_MODE"
-        echo "  API: http://127.0.0.1:8080/v1  |  Proxy: opencode2api + WARP"
-        echo "═════════════════════════════════════════════════════════════════════"
-        echo ""
-        if [ "$2" = "--continue" ]; then
-            exec "$CLI" --continue
-        else
-            exec "$CLI"
-        fi
-        ;;
-    stop)
-        "$PROXY" stop
-        pkill -f "opencode-bin" 2>/dev/null || true
-        ;;
-    restart)
-        "$PROXY" stop
-        pkill -f "opencode-bin" 2>/dev/null || true
-        sleep 1
-        "$PROXY" start
-        if wait_for_proxy; then
-            exec "$CLI"
-        else
-            echo "[!] Proxy did not become healthy. Run 'opencode-proxy logs' to check."
+            ;;
+        status)
+            "$PROXY" status
+            if pgrep -f "opencode-bin" >/dev/null 2>&1; then
+                echo "OpenCode CLI: RUNNING"
+            else
+                echo "OpenCode CLI: STOPPED"
+            fi
+            ;;
+        install)
+            python3 "$BASE_DIR/setup.py" install
+            ;;
+        *)
+            echo "Usage: opencode-unlimited [start|stop|restart|status|install]"
+            echo "       Run with no args for the interactive menu."
             exit 1
-        fi
-        ;;
-    status)
-        "$PROXY" status
-        if pgrep -f "opencode-bin" >/dev/null 2>&1; then
-            echo "OpenCode CLI: RUNNING"
-        else
-            echo "OpenCode CLI: STOPPED"
-        fi
-        ;;
-    install)
-        python3 "$BASE_DIR/setup.py" install
-        ;;
-    *)
-        echo "Usage: opencode-unlimited {install|start|stop|restart|status}"
-        exit 1
-        ;;
-esac
+            ;;
+    esac
+    exit 0
+fi
+
+# ── Interactive menu mode ──
+while true; do
+    show_main_menu
+    read -r choice
+    case "$choice" in
+        1) handle_rea ;;
+        2) handle_opencode_unlimited ;;
+        3) "$PROXY" doctor ; read -r -p "  Press Enter to continue..." _ ;;
+        4) "$PROXY" rate-limit ; read -r -p "  Press Enter to continue..." _ ;;
+        5) python3 "$BASE_DIR/setup.py" thinking status ; read -r -p "  Press Enter to continue..." _ ;;
+        6) echo ""
+           echo "  Skills commands:"
+           echo "    list   | install | sync | search <term>"
+           echo "    categories | show <name> | add <name>"
+           echo "    remove <name> | export <file> | import <file>"
+           read -r -p "  Run which? " skill_cmd
+           case "$skill_cmd" in
+               list|install|sync|categories) "$PROXY" skills "$skill_cmd" ;;
+               search|show|add|remove|export|import)
+                   read -r -p "  Enter argument: " skill_arg
+                   "$PROXY" skills "$skill_cmd" "$skill_arg" ;;
+               *) echo "  Unknown command." ;;
+           esac
+           read -r -p "  Press Enter to continue..." _ ;;
+        7) echo ""
+           echo "  Models commands:"
+           echo "    list   | best   | model <name>   | bench <model>"
+           read -r -p "  Run which? " model_cmd
+           case "$model_cmd" in
+               list|best) "$PROXY" models "$model_cmd" ;;
+               model|bench)
+                   read -r -p "  Enter model name: " model_arg
+                   "$PROXY" "$model_cmd" "$model_arg" ;;
+               *) echo "  Unknown command." ;;
+           esac
+           read -r -p "  Press Enter to continue..." _ ;;
+        8) echo ""
+           echo "  Zoom commands:"
+           echo "    zoom-in   | zoom-out   | zoom-reset"
+           read -r -p "  Run which? " zoom_cmd
+           case "$zoom_cmd" in
+               zoom-in|zoom-out|zoom-reset) "$PROXY" "$zoom_cmd" ;;
+               *) echo "  Unknown command." ;;
+           esac
+           read -r -p "  Press Enter to continue..." _ ;;
+        9) "$PROXY" fix-dns ; read -r -p "  Press Enter to continue..." _ ;;
+        10) "$PROXY" autostart "${2:-status}" ; read -r -p "  Press Enter to continue..." _ ;;
+        0) echo "  Goodbye!" ; exit 0 ;;
+        *) echo "  Invalid option." ; sleep 1 ;;
+    esac
+done
 """
-
-
 def write_unlimited_launcher():
     LOCAL_BIN.mkdir(parents=True, exist_ok=True)
     OPENCODE_UNLIMITED.write_text(UNLIMITED_SH)

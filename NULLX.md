@@ -9,8 +9,8 @@ OpenAI Chat Completions protocol, so any OpenAI-compatible gateway works, and
 ships with first-class support for the opencode2api rotation groups (`sota` /
 `sweet`), key pools, proxy rotation, and WARP egress.
 
-> Status: v0.1.0 — agent loop, streaming, tools, permissions, sessions, and the
-> gateway launcher are complete. The Bubble Tea TUI, LSP, and MCP are the next
+> Status: v0.2.0 — Bubble Tea TUI, agent loop, streaming, tools, permissions,
+> sessions, and the gateway launcher are complete. LSP and MCP are the next
 > layers (see Roadmap).
 
 ## Why this exists
@@ -249,7 +249,7 @@ without touching the agent loop.
 | `internal/agent/tools` | `internal/tools` |
 | `internal/agent/templates` (Go templates) | `internal/agent/prompt.go` |
 | `charm.land/fantasy` (providers) | `internal/llm` (OpenAI-compatible client) |
-| Bubble Tea TUI | line REPL (`internal/ui` + `internal/cmd/repl`) |
+| Bubble Tea TUI | `internal/tui` (viewport, textarea, spinner, lipgloss); `internal/ui` is the plain fallback |
 | SQLite + sqlc sessions | JSON session store |
 | Hooks, permissions, LSP, MCP | permissions now; hooks/LSP/MCP on the roadmap |
 
@@ -259,7 +259,7 @@ protocol and still reaches every model the gateway routes.
 
 ## Roadmap
 
-- Bubble Tea TUI with split panes and a status bar.
+- Split panes, mouse text selection, and a command palette.
 - LSP client for diagnostics and code intelligence.
 - MCP server support.
 - SQLite session store with search.

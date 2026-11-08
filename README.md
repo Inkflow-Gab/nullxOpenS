@@ -1,8 +1,9 @@
 # nullx + OpenCode UNLIMITED
 
-`nullx` is a small terminal coding agent. It talks to the local `opencode2api`
-gateway, which rotates Cloudflare WARP exits so the OpenCode free tier keeps
-answering. One install gets you both.
+`nullx` is a small terminal coding agent with a full-screen Bubble Tea TUI:
+streaming answers, tool cards, a spinner, scrollback, and inline permission
+prompts. It talks to the local `opencode2api` gateway, which rotates Cloudflare
+WARP exits so the OpenCode free tier keeps answering. One install gets you both.
 
 ## Quick start
 

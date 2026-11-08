@@ -43,13 +43,13 @@ type Agent struct {
 	Config  config.Config
 	Client  *llm.Client
 	Tools   *tools.Registry
-	UI      *ui.UI
+	UI      ui.Sink
 	Session *session.Session
 	history []llm.Message
 }
 
 // New builds an agent, restoring history from sess when it is non-nil.
-func New(cfg config.Config, client *llm.Client, registry *tools.Registry, screen *ui.UI, sess *session.Session) *Agent {
+func New(cfg config.Config, client *llm.Client, registry *tools.Registry, screen ui.Sink, sess *session.Session) *Agent {
 	runner := &Agent{Config: cfg, Client: client, Tools: registry, UI: screen, Session: sess}
 	if sess != nil {
 		runner.history = append([]llm.Message(nil), sess.Messages...)

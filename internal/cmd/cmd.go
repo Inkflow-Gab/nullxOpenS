@@ -18,10 +18,11 @@ import (
 	"github.com/Inkflow-Gab/nullxOpenS/internal/llm"
 	"github.com/Inkflow-Gab/nullxOpenS/internal/session"
 	"github.com/Inkflow-Gab/nullxOpenS/internal/tools"
+	"github.com/Inkflow-Gab/nullxOpenS/internal/tui"
 	"github.com/Inkflow-Gab/nullxOpenS/internal/ui"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // Run dispatches the command line.
 func Run(args []string) error {
@@ -142,6 +143,9 @@ func repl(ctx context.Context, args []string) error {
 	sess, err := session.New(filepath.Join(config.DataDir(), "sessions"))
 	if err != nil {
 		return err
+	}
+	if screen.Interactive() {
+		return tui.Run(cfg, sess, version, path)
 	}
 	runner := build(cfg, screen, sess)
 

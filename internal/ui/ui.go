@@ -9,6 +9,18 @@ import (
 	"strings"
 )
 
+// Sink is the output surface the agent writes to. The plain terminal UI and
+// the Bubble Tea TUI both implement it.
+type Sink interface {
+	Interactive() bool
+	Printf(format string, args ...any)
+	Stream(text string)
+	Newline()
+	ToolStart(name, arguments string)
+	ToolResult(name, output string)
+	Ask(question string) bool
+}
+
 // UI wraps the terminal streams.
 type UI struct {
 	in          *bufio.Reader

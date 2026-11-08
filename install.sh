@@ -93,15 +93,18 @@ fi
 
 mkdir -p "$BASE_DIR" "$LOCAL_BIN"
 if [ -n "$SRC_DIR" ] && [ -f "$SRC_DIR/setup.py" ]; then
-    cp "$SRC_DIR/setup.py" "$BASE_DIR/setup.py"
+    SETUP="$SRC_DIR/setup.py"
 else
+    SETUP="$(mktemp -d)/setup.py"
     info "downloading setup.py"
-    curl -fsSL "$RAW/setup.py" -o "$BASE_DIR/setup.py"
+    curl -fsSL "$RAW/setup.py" -o "$SETUP"
 fi
-chmod +x "$BASE_DIR/setup.py"
+chmod +x "$SETUP"
 
+# setup.py copies itself into ~/.opencode-proxy, so it must not be run from
+# inside that directory or shutil raises SameFileError.
 info "installing the gateway"
-python3 "$BASE_DIR/setup.py" install
+python3 "$SETUP" install
 
 # --- nullx binary ----------------------------------------------------------
 
@@ -110,7 +113,7 @@ install_release() {
     local api="https://api.github.com/repos/$REPO"
     local id=""
     info "downloading $ASSET ($NULLX_TAG)"
-    if curl -fsSL --retry 2 --retry-delay 1 "$direct" -o "$LOCAL_BIN/nullx.tmp"; then
+    if curl -fsL --max-time 45 --retry 1 --retry-delay 1 "$direct" -o "$LOCAL_BIN/nullx.tmp"; then
         chmod +x "$LOCAL_BIN/nullx.tmp"
         mv "$LOCAL_BIN/nullx.tmp" "$LOCAL_BIN/nullx"
         return 0

@@ -86,7 +86,7 @@ release_tag() {
 if [ -z "$NULLX_TAG" ]; then
     NULLX_TAG=$(release_tag)
 fi
-[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.1.0"
+[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.3.0"
 info "release: $NULLX_TAG"
 
 # --- source ----------------------------------------------------------------

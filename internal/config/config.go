@@ -19,18 +19,19 @@ const (
 
 // Config is the nullx configuration stored in config.json.
 type Config struct {
-	BaseURL       string   `json:"base_url"`
-	APIKey        string   `json:"api_key"`
-	Model         string   `json:"model"`
-	SystemPrompt  string   `json:"system_prompt,omitempty"`
-	MaxTokens     int      `json:"max_tokens"`
-	Temperature   float64  `json:"temperature"`
-	MaxSteps      int      `json:"max_steps"`
-	Timeout       int      `json:"timeout_seconds"`
-	Permission    string   `json:"permission"`
-	ContextFiles  []string `json:"context_files"`
-	GatewayBin    string   `json:"gateway_bin,omitempty"`
-	GatewayConfig string   `json:"gateway_config,omitempty"`
+	BaseURL         string   `json:"base_url"`
+	APIKey          string   `json:"api_key"`
+	Model           string   `json:"model"`
+	SystemPrompt    string   `json:"system_prompt,omitempty"`
+	MaxTokens       int      `json:"max_tokens"`
+	Temperature     float64  `json:"temperature"`
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	MaxSteps        int      `json:"max_steps"`
+	Timeout         int      `json:"timeout_seconds"`
+	Permission      string   `json:"permission"`
+	ContextFiles    []string `json:"context_files"`
+	GatewayBin      string   `json:"gateway_bin,omitempty"`
+	GatewayConfig   string   `json:"gateway_config,omitempty"`
 }
 
 // Default returns the built-in configuration, with environment overrides
@@ -40,17 +41,18 @@ func Default() Config {
 	baseURL := envOr("NULLX_BASE_URL", "http://127.0.0.1:8080/v1")
 	gatewayBin, gatewayConfig := discoverGateway()
 	return Config{
-		BaseURL:       baseURL,
-		APIKey:        envOr("NULLX_API_KEY", discoverAPIKey(baseURL)),
-		Model:         envOr("NULLX_MODEL", "auto"),
-		MaxTokens:     8192,
-		Temperature:   0.2,
-		MaxSteps:      40,
-		Timeout:       300,
-		Permission:    PermissionAsk,
-		ContextFiles:  []string{"AGENTS.md", "CLAUDE.md", "GEMINI.md", "NULLX.md", ".nullx.md"},
-		GatewayBin:    envOr("NULLX_GATEWAY_BIN", gatewayBin),
-		GatewayConfig: envOr("NULLX_GATEWAY_CONFIG", gatewayConfig),
+		BaseURL:         baseURL,
+		APIKey:          envOr("NULLX_API_KEY", discoverAPIKey(baseURL)),
+		Model:           envOr("NULLX_MODEL", "auto"),
+		MaxTokens:       8192,
+		Temperature:     0.2,
+		ReasoningEffort: envOr("NULLX_REASONING_EFFORT", "low"),
+		MaxSteps:        40,
+		Timeout:         300,
+		Permission:      PermissionAsk,
+		ContextFiles:    []string{"AGENTS.md", "CLAUDE.md", "GEMINI.md", "NULLX.md", ".nullx.md"},
+		GatewayBin:      envOr("NULLX_GATEWAY_BIN", gatewayBin),
+		GatewayConfig:   envOr("NULLX_GATEWAY_CONFIG", gatewayConfig),
 	}
 }
 
@@ -194,6 +196,9 @@ func (c *Config) applyDefaults() {
 	if c.MaxTokens <= 0 {
 		c.MaxTokens = d.MaxTokens
 	}
+	if strings.TrimSpace(c.ReasoningEffort) == "" {
+		c.ReasoningEffort = d.ReasoningEffort
+	}
 	if c.MaxSteps <= 0 {
 		c.MaxSteps = d.MaxSteps
 	}
@@ -226,6 +231,11 @@ func (c Config) Validate() error {
 	}
 	if c.MaxSteps < 1 {
 		return fmt.Errorf("max_steps must be positive")
+	}
+	switch strings.ToLower(c.ReasoningEffort) {
+	case "", "none", "minimal", "low", "medium", "high", "xhigh", "max":
+	default:
+		return fmt.Errorf("reasoning_effort must be none, minimal, low, medium, high, xhigh, or max")
 	}
 	if c.Timeout < 1 {
 		return fmt.Errorf("timeout_seconds must be positive")

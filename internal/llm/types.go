@@ -39,23 +39,45 @@ type ToolDefinition struct {
 
 // ChatRequest is the body of a chat completions request.
 type ChatRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	Stream      bool      `json:"stream"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Temperature float64   `json:"temperature,omitempty"`
+	Model           string    `json:"model"`
+	Messages        []Message `json:"messages"`
+	Tools           []Tool    `json:"tools,omitempty"`
+	Stream          bool      `json:"stream"`
+	MaxTokens       int       `json:"max_tokens,omitempty"`
+	Temperature     float64   `json:"temperature,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
+}
+
+// OpenCodeUsage is the billing block opencode2api adds to a usage object.
+type OpenCodeUsage struct {
+	BillingSource string  `json:"billing_source"`
+	ListCost      float64 `json:"list_cost"`
 }
 
 // Usage is the reported token usage of a response.
 type Usage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int            `json:"prompt_tokens"`
+	CompletionTokens int            `json:"completion_tokens"`
+	TotalTokens      int            `json:"total_tokens"`
+	Cost             *float64       `json:"cost"`
+	OpenCode         *OpenCodeUsage `json:"opencode"`
+}
+
+// Billing reports where the request was billed. known is false when the
+// gateway did not send pricing information at all.
+func (u Usage) Billing() (source string, cost float64, known bool) {
+	if u.OpenCode != nil && u.OpenCode.BillingSource != "" {
+		return u.OpenCode.BillingSource, u.OpenCode.ListCost, true
+	}
+	if u.Cost != nil {
+		return "", *u.Cost, true
+	}
+	return "", 0, false
 }
 
 // Result is the final assistant message and usage of one completion.
 type Result struct {
-	Message Message
-	Usage   Usage
+	Message   Message
+	Reasoning string
+	Usage     Usage
 }

@@ -46,6 +46,7 @@ type Agent struct {
 	UI      ui.Sink
 	Session *session.Session
 	history []llm.Message
+	redo    []llm.Message
 }
 
 // New builds an agent, restoring history from sess when it is non-nil.
@@ -74,15 +75,17 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		a.history = append(a.history, llm.Message{Role: "system", Content: systemPrompt(a.Config, cwd)})
 	}
 	a.history = append(a.history, llm.Message{Role: "user", Content: input})
+	a.redo = nil
 	a.persist()
 
 	for step := 0; step < a.Config.MaxSteps; step++ {
 		request := llm.ChatRequest{
-			Model:       a.Config.Model,
-			Messages:    a.history,
-			Tools:       a.Tools.Schemas(),
-			MaxTokens:   a.Config.MaxTokens,
-			Temperature: a.Config.Temperature,
+			Model:           a.Config.Model,
+			Messages:        a.history,
+			Tools:           a.Tools.Schemas(),
+			MaxTokens:       a.Config.MaxTokens,
+			Temperature:     a.Config.Temperature,
+			ReasoningEffort: reasoningEffort(a.Config.ReasoningEffort),
 		}
 		result, err := a.stream(ctx, request)
 		if err != nil {
@@ -115,9 +118,17 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 // refreshes the catalog and retries once with the first free model. This keeps
 // a stale or paid model ID from breaking a free-tier session.
 func (a *Agent) stream(ctx context.Context, request llm.ChatRequest) (llm.Result, error) {
-	result, err := a.Client.Stream(ctx, request, func(delta string) {
-		a.UI.Stream(delta)
-	})
+	send := func(req llm.ChatRequest) (llm.Result, error) {
+		result, err := a.Client.Stream(ctx, req,
+			func(delta string) { a.UI.Stream(delta) },
+			func(delta string) { a.UI.Reasoning(delta) },
+		)
+		if err == nil {
+			a.reportBilling(result.Usage)
+		}
+		return result, err
+	}
+	result, err := send(request)
 	if err == nil || !isModelError(err) {
 		return result, err
 	}
@@ -132,9 +143,24 @@ func (a *Agent) stream(ctx context.Context, request llm.ChatRequest) (llm.Result
 	a.UI.Printf("\nmodel %q is unavailable; retrying with %q", request.Model, chosen.ID)
 	a.Config.Model = chosen.ID
 	request.Model = chosen.ID
-	return a.Client.Stream(ctx, request, func(delta string) {
-		a.UI.Stream(delta)
-	})
+	return send(request)
+}
+
+func (a *Agent) reportBilling(usage llm.Usage) {
+	source, cost, known := usage.Billing()
+	if !known {
+		return
+	}
+	free := strings.EqualFold(source, "free") || cost == 0
+	a.UI.Billing(source, free, cost, true)
+}
+
+func reasoningEffort(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "none") {
+		return ""
+	}
+	return value
 }
 
 func isModelError(err error) bool {
@@ -196,6 +222,124 @@ func (a *Agent) persist() {
 	if err := a.Session.Save(); err != nil {
 		a.UI.Printf("warning: session save failed: %v", err)
 	}
+}
+
+// Compact replaces the conversation with a model-written summary, keeping the
+// system prompt and a bounded history for the next turn.
+func (a *Agent) Compact(ctx context.Context) (string, error) {
+	if len(a.history) < 3 {
+		return "", fmt.Errorf("not enough conversation to compact")
+	}
+	var transcript strings.Builder
+	for _, message := range a.history {
+		switch message.Role {
+		case "system":
+			continue
+		case "tool":
+			fmt.Fprintf(&transcript, "tool result: %s\n\n", clip(message.Content, 4000))
+		case "assistant":
+			if message.Content != "" {
+				fmt.Fprintf(&transcript, "assistant: %s\n\n", clip(message.Content, 8000))
+			}
+			for _, call := range message.ToolCalls {
+				fmt.Fprintf(&transcript, "assistant called %s(%s)\n", call.Function.Name, clip(call.Function.Arguments, 500))
+			}
+		default:
+			fmt.Fprintf(&transcript, "%s: %s\n\n", message.Role, clip(message.Content, 8000))
+		}
+	}
+	request := llm.ChatRequest{
+		Model: a.Config.Model,
+		Messages: []llm.Message{
+			{Role: "system", Content: "Summarize the conversation. Keep decisions, file paths, commands, errors, and open tasks. Be concise but complete."},
+			{Role: "user", Content: transcript.String()},
+		},
+		MaxTokens:       2048,
+		Temperature:     0.2,
+		ReasoningEffort: "low",
+	}
+	result, err := a.Client.Stream(ctx, request, nil, nil)
+	if err != nil {
+		return "", err
+	}
+	summary := strings.TrimSpace(result.Message.Content)
+	if summary == "" {
+		return "", fmt.Errorf("the model returned an empty summary")
+	}
+	cwd, _ := os.Getwd()
+	a.history = []llm.Message{
+		{Role: "system", Content: systemPrompt(a.Config, cwd)},
+		{Role: "user", Content: "Conversation summary so far:\n\n" + summary},
+		{Role: "assistant", Content: "Understood. I have the summary and will continue from it."},
+	}
+	a.redo = nil
+	a.persist()
+	return summary, nil
+}
+
+// Undo removes the last user turn and everything after it.
+func (a *Agent) Undo() bool {
+	for i := len(a.history) - 1; i >= 0; i-- {
+		if a.history[i].Role != "user" {
+			continue
+		}
+		a.redo = append([]llm.Message(nil), a.history[i:]...)
+		a.history = a.history[:i]
+		a.persist()
+		return true
+	}
+	return false
+}
+
+// Redo restores the turn most recently removed by Undo.
+func (a *Agent) Redo() bool {
+	if len(a.redo) == 0 {
+		return false
+	}
+	a.history = append(a.history, a.redo...)
+	a.redo = nil
+	a.persist()
+	return true
+}
+
+// Export writes the conversation as Markdown.
+func (a *Agent) Export(path string) error {
+	var builder strings.Builder
+	if a.Session != nil {
+		fmt.Fprintf(&builder, "# nullx session %s\n\n", a.Session.ID)
+	}
+	for _, message := range a.history {
+		switch message.Role {
+		case "user":
+			fmt.Fprintf(&builder, "## User\n\n%s\n\n", message.Content)
+		case "assistant":
+			if message.Content != "" {
+				fmt.Fprintf(&builder, "## Assistant\n\n%s\n\n", message.Content)
+			}
+			for _, call := range message.ToolCalls {
+				fmt.Fprintf(&builder, "**tool** `%s`\n\n```json\n%s\n```\n\n", call.Function.Name, call.Function.Arguments)
+			}
+		case "tool":
+			fmt.Fprintf(&builder, "### Tool result\n\n```\n%s\n```\n\n", message.Content)
+		}
+	}
+	return os.WriteFile(path, []byte(builder.String()), 0o644)
+}
+
+// HistoryCount reports how many messages the model will see next turn.
+func (a *Agent) HistoryCount() int { return len(a.history) }
+
+// History returns a copy of the current conversation.
+func (a *Agent) History() []llm.Message {
+	return append([]llm.Message(nil), a.history...)
+}
+
+func clip(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "\n[truncated]"
 }
 
 func truncate(value string, limit int) string {

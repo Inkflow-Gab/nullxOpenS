@@ -9,9 +9,9 @@ OpenAI Chat Completions protocol, so any OpenAI-compatible gateway works, and
 ships with first-class support for the opencode2api rotation groups (`sota` /
 `sweet`), key pools, proxy rotation, and WARP egress.
 
-> Status: v0.2.0 — Bubble Tea TUI, agent loop, streaming, tools, permissions,
-> sessions, and the gateway launcher are complete. LSP and MCP are the next
-> layers (see Roadmap).
+> Status: v0.3.0 — Bubble Tea TUI with collapsible reasoning, live gateway and
+> free-tier status, OpenCode-style commands, streaming, tools, permissions, and
+> sessions. LSP and MCP are the next layers (see Roadmap).
 
 ## Why this exists
 
@@ -69,13 +69,36 @@ spinner, lipgloss styling):
 | --- | --- |
 | `enter` | send the prompt |
 | `alt+enter` | insert a newline |
+| `ctrl+t` | expand or collapse reasoning blocks |
 | `pgup` / `pgdn`, mouse wheel | scroll the transcript |
 | `ctrl+c` | interrupt the running model; quit when idle |
 | `ctrl+d` | quit when the input is empty |
 
-Permission prompts appear inline: `y` allows the tool, `n` denies it. Slash
-commands: `/help`, `/clear`, `/model <id>`, `/tools`, `/session`, `/config`,
-`/exit`. When stdin is not a terminal, `nullx` falls back to the line REPL.
+The status strip shows gateway health, the number of free models the gateway
+exposes, WARP state, and the last billing result (`free-tier: OK`, `PAID`, or
+`BLOCKED`). Reasoning deltas stream into a collapsed/expanded thinking block.
+
+Commands mirror the OpenCode CLI:
+
+| Command | Action |
+| --- | --- |
+| `/init` | analyze the repo and write `AGENTS.md` |
+| `/new`, `/clear` | start a fresh conversation |
+| `/compact` | summarize and replace the conversation |
+| `/undo`, `/redo` | rewind or restore the last turn |
+| `/models` | list gateway models |
+| `/model <id>` | switch model |
+| `/thinking <mode>` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `/details` | expand or collapse thinking |
+| `/status` | gateway, free-tier, WARP, model, session state |
+| `/sessions` | list saved sessions |
+| `/export [path]` | write the conversation as Markdown |
+| `/editor` | compose the prompt in `$EDITOR` |
+| `/tools`, `/session`, `/config`, `/share` | inspect the runtime |
+| `/exit` | quit |
+
+Permission prompts appear inline: `y` allows the tool, `n` denies it. When
+stdin is not a terminal, `nullx` falls back to the line REPL.
 
 ## Manual setup (developers)
 
@@ -180,6 +203,7 @@ Config path: `$NULLX_CONFIG`, or `<user-config-dir>/nullx/config.json`
 | `system_prompt` | empty | Extra instructions appended to the built-in prompt. |
 | `max_tokens` | `8192` | Per-completion token ceiling. |
 | `temperature` | `0.2` | Sampling temperature. |
+| `reasoning_effort` | `low` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
 | `max_steps` | `40` | Tool-call loop ceiling. |
 | `timeout_seconds` | `300` | HTTP request timeout. |
 | `permission` | `ask` | `ask`, `allow`, or `deny` for tool execution. |
@@ -191,6 +215,7 @@ Environment overrides (highest precedence for the connection fields):
 
 - `NULLX_CONFIG`, `NULLX_DATA`
 - `NULLX_BASE_URL`, `NULLX_API_KEY`, `NULLX_MODEL`
+- `NULLX_REASONING_EFFORT`
 - `NULLX_GATEWAY_BIN`, `NULLX_GATEWAY_CONFIG`
 
 `NULLX_API_KEY` always wins over the key read from the gateway config.

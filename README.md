@@ -37,11 +37,17 @@ bash install.sh
 `nullx` opens a full-screen Bubble Tea interface when stdin is a terminal:
 
 - streaming assistant output, tool cards, spinner, and scrollback
+- collapsible reasoning blocks (`ctrl+t` or `/details`)
+- live status strip: gateway health, free-model count, WARP state, and
+  `free-tier: OK` / `PAID` / `BLOCKED` from the gateway usage block
 - inline `y` / `n` permission prompts
 - `enter` send, `alt+enter` newline, `pgup` / `pgdn` or wheel scroll
 - `ctrl+c` interrupts a running model, or quits when idle
-- slash commands: `/help`, `/clear`, `/model`, `/tools`, `/session`, `/config`,
-  `/exit`
+
+OpenCode-style commands: `/init`, `/new`, `/compact`, `/undo`, `/redo`,
+`/models`, `/model`, `/thinking`, `/details`, `/status`, `/sessions`,
+`/export`, `/editor`, `/tools`, `/session`, `/config`, `/share`, `/help`,
+`/exit`.
 
 Piped input falls back to the line REPL, so scripts and `nullx run` stay clean.
 

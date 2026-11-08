@@ -22,7 +22,7 @@ import (
 	"github.com/Inkflow-Gab/nullxOpenS/internal/ui"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 // Run dispatches the command line.
 func Run(args []string) error {
@@ -378,7 +378,7 @@ func doctor(args []string) error {
 			Messages:    []llm.Message{{Role: "user", Content: "Reply with OK."}},
 			MaxTokens:   16,
 			Temperature: 0,
-		}, nil)
+		}, nil, nil)
 		if err != nil {
 			fmt.Printf("inference: FAIL (%v)\n", err)
 			return fmt.Errorf("selected free model did not answer: %w", err)

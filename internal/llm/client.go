@@ -45,9 +45,10 @@ func (c *Client) authorize(req *http.Request) {
 	}
 }
 
-// Stream sends a chat request and invokes onDelta for each content fragment.
-// It returns the completed assistant message, including any tool calls.
-func (c *Client) Stream(ctx context.Context, request ChatRequest, onDelta func(string)) (Result, error) {
+// Stream sends a chat request and invokes onDelta for each content fragment and
+// onReasoning for each reasoning fragment. Either callback may be nil. It
+// returns the completed assistant message, including any tool calls.
+func (c *Client) Stream(ctx context.Context, request ChatRequest, onDelta, onReasoning func(string)) (Result, error) {
 	request.Stream = true
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -70,15 +71,19 @@ func (c *Client) Stream(ctx context.Context, request ChatRequest, onDelta func(s
 		return Result{}, fmt.Errorf("upstream %s: %s", resp.Status, strings.TrimSpace(string(snippet)))
 	}
 	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return decodeResponse(resp.Body)
+		return decodeResponse(resp.Body, onReasoning)
 	}
-	return parseStream(resp.Body, onDelta)
+	return parseStream(resp.Body, onDelta, onReasoning)
 }
 
-func decodeResponse(body io.Reader) (Result, error) {
+func decodeResponse(body io.Reader, onReasoning func(string)) (Result, error) {
 	var response struct {
 		Choices []struct {
-			Message Message `json:"message"`
+			Message struct {
+				Message
+				ReasoningContent string `json:"reasoning_content"`
+				Reasoning        string `json:"reasoning"`
+			} `json:"message"`
 		} `json:"choices"`
 		Usage Usage     `json:"usage"`
 		Error *apiError `json:"error"`
@@ -92,14 +97,24 @@ func decodeResponse(body io.Reader) (Result, error) {
 	if len(response.Choices) == 0 {
 		return Result{}, fmt.Errorf("upstream returned no choices")
 	}
-	return Result{Message: response.Choices[0].Message, Usage: response.Usage}, nil
+	choice := response.Choices[0].Message
+	reasoning := choice.ReasoningContent
+	if reasoning == "" {
+		reasoning = choice.Reasoning
+	}
+	if reasoning != "" && onReasoning != nil {
+		onReasoning(reasoning)
+	}
+	return Result{Message: choice.Message, Reasoning: reasoning, Usage: response.Usage}, nil
 }
 
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Type     string `json:"type"`
@@ -120,10 +135,10 @@ type toolAccumulator struct {
 	args           strings.Builder
 }
 
-func parseStream(body io.Reader, onDelta func(string)) (Result, error) {
+func parseStream(body io.Reader, onDelta, onReasoning func(string)) (Result, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64<<10), 16<<20)
-	var content strings.Builder
+	var content, reasoning strings.Builder
 	var usage Usage
 	calls := map[int]*toolAccumulator{}
 	for scanner.Scan() {
@@ -153,6 +168,16 @@ func parseStream(body io.Reader, onDelta func(string)) (Result, error) {
 				content.WriteString(choice.Delta.Content)
 				if onDelta != nil {
 					onDelta(choice.Delta.Content)
+				}
+			}
+			thought := choice.Delta.ReasoningContent
+			if thought == "" {
+				thought = choice.Delta.Reasoning
+			}
+			if thought != "" {
+				reasoning.WriteString(thought)
+				if onReasoning != nil {
+					onReasoning(thought)
 				}
 			}
 			for _, call := range choice.Delta.ToolCalls {
@@ -200,7 +225,7 @@ func parseStream(body io.Reader, onDelta func(string)) (Result, error) {
 			},
 		})
 	}
-	return Result{Message: message, Usage: usage}, nil
+	return Result{Message: message, Reasoning: reasoning.String(), Usage: usage}, nil
 }
 
 // ModelCost is the per-million-token price reported by the gateway.

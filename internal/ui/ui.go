@@ -15,9 +15,11 @@ type Sink interface {
 	Interactive() bool
 	Printf(format string, args ...any)
 	Stream(text string)
+	Reasoning(text string)
 	Newline()
 	ToolStart(name, arguments string)
 	ToolResult(name, output string)
+	Billing(source string, free bool, cost float64, known bool)
 	Ask(question string) bool
 }
 
@@ -54,6 +56,12 @@ func (u *UI) Printf(format string, args ...any) {
 func (u *UI) Stream(text string) {
 	fmt.Fprint(u.out, text)
 }
+
+// Reasoning is ignored by the plain terminal UI; piped output stays clean.
+func (u *UI) Reasoning(string) {}
+
+// Billing is ignored by the plain terminal UI.
+func (u *UI) Billing(string, bool, float64, bool) {}
 
 // Newline ends the current output line.
 func (u *UI) Newline() {

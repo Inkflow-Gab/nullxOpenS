@@ -4,6 +4,7 @@
   "model": "auto",
   "max_tokens": 8192,
   "temperature": 0.2,
+  "reasoning_effort": "low",
   "max_steps": 40,
   "timeout_seconds": 300,
   "permission": "ask",

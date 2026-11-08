@@ -106,9 +106,23 @@ python3 "$BASE_DIR/setup.py" install
 # --- nullx binary ----------------------------------------------------------
 
 install_release() {
-    local url="https://github.com/$REPO/releases/download/$NULLX_TAG/$ASSET"
+    local direct="https://github.com/$REPO/releases/download/$NULLX_TAG/$ASSET"
+    local api="https://api.github.com/repos/$REPO"
+    local id=""
     info "downloading $ASSET ($NULLX_TAG)"
-    if curl -fsSL "$url" -o "$LOCAL_BIN/nullx.tmp"; then
+    if curl -fsSL --retry 2 --retry-delay 1 "$direct" -o "$LOCAL_BIN/nullx.tmp"; then
+        chmod +x "$LOCAL_BIN/nullx.tmp"
+        mv "$LOCAL_BIN/nullx.tmp" "$LOCAL_BIN/nullx"
+        return 0
+    fi
+    rm -f "$LOCAL_BIN/nullx.tmp"
+    # Some networks stall on the release CDN; the API asset endpoint usually
+    # works there, so resolve the asset id and try it.
+    id=$(curl -fsSL "$api/releases/tags/$NULLX_TAG" 2>/dev/null | python3 -c \
+        'import json,sys; d=json.load(sys.stdin); print(next((a["id"] for a in d.get("assets",[]) if a["name"]==sys.argv[1]),""))' \
+        "$ASSET" 2>/dev/null || true)
+    if [ -n "$id" ] && curl -fsSL -H "Accept: application/octet-stream" \
+        "$api/releases/assets/$id" -o "$LOCAL_BIN/nullx.tmp"; then
         chmod +x "$LOCAL_BIN/nullx.tmp"
         mv "$LOCAL_BIN/nullx.tmp" "$LOCAL_BIN/nullx"
         return 0

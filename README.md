@@ -32,6 +32,19 @@ cd nullxOpenS
 bash install.sh
 ```
 
+## The TUI
+
+`nullx` opens a full-screen Bubble Tea interface when stdin is a terminal:
+
+- streaming assistant output, tool cards, spinner, and scrollback
+- inline `y` / `n` permission prompts
+- `enter` send, `alt+enter` newline, `pgup` / `pgdn` or wheel scroll
+- `ctrl+c` interrupts a running model, or quits when idle
+- slash commands: `/help`, `/clear`, `/model`, `/tools`, `/session`, `/config`,
+  `/exit`
+
+Piped input falls back to the line REPL, so scripts and `nullx run` stay clean.
+
 Full nullx documentation: [NULLX.md](NULLX.md). The gateway documentation
 continues below.
 

@@ -60,6 +60,23 @@ opencode-proxy status     # gateway control
 `~/.opencode-proxy/config.json` and finds `~/.opencode-proxy/bin/opencode2api`,
 so no API key needs to be copied by hand.
 
+## Interface
+
+The default interface is a full-screen Bubble Tea TUI (viewport, textarea,
+spinner, lipgloss styling):
+
+| Key | Action |
+| --- | --- |
+| `enter` | send the prompt |
+| `alt+enter` | insert a newline |
+| `pgup` / `pgdn`, mouse wheel | scroll the transcript |
+| `ctrl+c` | interrupt the running model; quit when idle |
+| `ctrl+d` | quit when the input is empty |
+
+Permission prompts appear inline: `y` allows the tool, `n` denies it. Slash
+commands: `/help`, `/clear`, `/model <id>`, `/tools`, `/session`, `/config`,
+`/exit`. When stdin is not a terminal, `nullx` falls back to the line REPL.
+
 ## Manual setup (developers)
 
 1. Start the gateway:

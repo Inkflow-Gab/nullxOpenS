@@ -1,0 +1,11 @@
+{
+  "base_url": "http://127.0.0.1:8080/v1",
+  "api_key": "local-test-key",
+  "model": "auto",
+  "max_tokens": 8192,
+  "temperature": 0.2,
+  "max_steps": 40,
+  "timeout_seconds": 300,
+  "permission": "ask",
+  "context_files": ["AGENTS.md", "CLAUDE.md", "GEMINI.md", "NULLX.md", ".nullx.md"]
+}

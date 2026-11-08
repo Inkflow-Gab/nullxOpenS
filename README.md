@@ -1,16 +1,56 @@
-# OpenCode UNLIMITED
+# nullx + OpenCode UNLIMITED
+
+`nullx` is a small terminal coding agent. It talks to the local `opencode2api`
+gateway, which rotates Cloudflare WARP exits so the OpenCode free tier keeps
+answering. One install gets you both.
+
+## Quick start
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/install.sh | bash
+nullx
+```
+
+The installer sets up the gateway, installs the `nullx` binary for this device,
+writes `~/.config/nullx/config.json`, starts the gateway, and probes a free
+model end to end.
+
+```bash
+nullx                     # interactive shell
+nullx "fix the tests"     # one-shot prompt
+nullx models -free        # free models the gateway exposes
+nullx doctor              # gateway + free-model check
+opencode-proxy status     # gateway control
+```
+
+From a clone:
+
+```bash
+git clone https://github.com/Inkflow-Gab/nullxOpenS.git
+cd nullxOpenS
+bash install.sh
+```
+
+Full nullx documentation: [NULLX.md](NULLX.md). The gateway documentation
+continues below.
+
+---
+
+# OpenCode UNLIMITED gateway
 
 > A local proxy for the OpenCode free tier. Cloudflare WARP rotates the exit
 > IP on every request, so the quota never runs out.
 > Termux, ARM64, no root, no Docker, no server of your own.
+
+Gateway only (no `nullx` agent):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
 opencode-unlimited
 ```
 
-That is the whole install. The rest of this page is what you get, how to fix
-things when they break, and what else the proxy is good for.
+The rest of this page is the gateway: what you get, how to fix things when they
+break, and what else the proxy is good for.
 
 ---
 
@@ -31,10 +71,12 @@ and about 300 MB of free space.
 
 ## Install
 
-**One command** (works on Termux and inside proot-distro):
+**Full stack, one command** (gateway + `nullx`; works on Termux and inside
+proot-distro):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/install.sh | bash
+nullx
 ```
 
 **From a clone** (needs `git`):
@@ -43,15 +85,13 @@ curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.p
 apt-get install -y git
 git clone https://github.com/Inkflow-Gab/nullxOpenS.git
 cd nullxOpenS
-python3 setup.py install
+bash install.sh
 ```
 
-**With the bootstrap script** (installs the missing packages first):
+**Gateway only** (no `nullx` agent):
 
 ```bash
-git clone https://github.com/Inkflow-Gab/nullxOpenS.git
-cd nullxOpenS
-bash install.sh
+curl -fsSL https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py | python3
 ```
 
 Inside proot-distro the installer uses `apt-get`, on Termux it uses `pkg`.
@@ -60,7 +100,8 @@ Both are detected automatically.
 ### Check it
 
 ```bash
-opencode-proxy doctor
+nullx doctor
+nullx models -free
 opencode-proxy status
 ```
 
@@ -216,6 +257,8 @@ shows what is live right now.
 | `~/.local/bin/opencode-proxy` | The gateway command |
 | `~/.local/bin/opencode-unlimited` | The launcher |
 | `~/.local/bin/opencode` | The OpenCode CLI wrapper |
+| `~/.local/bin/nullx` | The `nullx` agent binary |
+| `~/.config/nullx/config.json` | `nullx` configuration (auto-detects the gateway key) |
 
 ## Uninstall
 

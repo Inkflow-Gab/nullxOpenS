@@ -22,8 +22,8 @@ err() { printf '  %bxx%b %s\n' "$RED" "$NC" "$1"; }
 
 REPO="Inkflow-Gab/nullxOpenS"
 RAW="https://raw.githubusercontent.com/$REPO/main"
-NULLX_TAG="${NULLX_TAG:-v0.1.0}"
-GO_VERSION_REQUIRED="1.24"
+API_BASE="https://api.github.com/repos/$REPO"
+NULLX_TAG="${NULLX_TAG:-}"
 
 BASE_DIR="$HOME/.opencode-proxy"
 LOCAL_BIN="$HOME/.local/bin"
@@ -76,6 +76,19 @@ if [ -n "$MISSING" ]; then
     fi
 fi
 
+# --- release tag -----------------------------------------------------------
+
+release_tag() {
+    curl -fsSL "$API_BASE/releases/latest" 2>/dev/null \
+        | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true
+}
+
+if [ -z "$NULLX_TAG" ]; then
+    NULLX_TAG=$(release_tag)
+fi
+[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.1.0"
+info "release: $NULLX_TAG"
+
 # --- source ----------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
@@ -110,7 +123,6 @@ python3 "$SETUP" install
 
 install_release() {
     local direct="https://github.com/$REPO/releases/download/$NULLX_TAG/$ASSET"
-    local api="https://api.github.com/repos/$REPO"
     local id=""
     info "downloading $ASSET ($NULLX_TAG)"
     if curl -fsL --max-time 45 --retry 1 --retry-delay 1 "$direct" -o "$LOCAL_BIN/nullx.tmp"; then
@@ -121,11 +133,11 @@ install_release() {
     rm -f "$LOCAL_BIN/nullx.tmp"
     # Some networks stall on the release CDN; the API asset endpoint usually
     # works there, so resolve the asset id and try it.
-    id=$(curl -fsSL "$api/releases/tags/$NULLX_TAG" 2>/dev/null | python3 -c \
+    id=$(curl -fsSL "$API_BASE/releases/tags/$NULLX_TAG" 2>/dev/null | python3 -c \
         'import json,sys; d=json.load(sys.stdin); print(next((a["id"] for a in d.get("assets",[]) if a["name"]==sys.argv[1]),""))' \
         "$ASSET" 2>/dev/null || true)
     if [ -n "$id" ] && curl -fsSL -H "Accept: application/octet-stream" \
-        "$api/releases/assets/$id" -o "$LOCAL_BIN/nullx.tmp"; then
+        "$API_BASE/releases/assets/$id" -o "$LOCAL_BIN/nullx.tmp"; then
         chmod +x "$LOCAL_BIN/nullx.tmp"
         mv "$LOCAL_BIN/nullx.tmp" "$LOCAL_BIN/nullx"
         return 0

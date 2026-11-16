@@ -1866,6 +1866,24 @@ def do_uninstall():
         except OSError as e:
             warn(f"could not remove {directory}: {e}")
 
+    stamp = BASE_DIR / "engine.version"
+    try:
+        if stamp.exists():
+            stamp.unlink()
+    except OSError:
+        pass
+
+    # Put the resolver back the way it was, if the fix-dns command changed it.
+    backup = Path("/etc/resolv.conf.opencode-unlimited.bak")
+    resolv = Path("/etc/resolv.conf")
+    if backup.exists() and resolv.exists():
+        try:
+            shutil.copy2(backup, resolv)
+            backup.unlink()
+            info("restored /etc/resolv.conf")
+        except OSError as e:
+            warn(f"could not restore /etc/resolv.conf: {e}")
+
     ok("uninstall complete")
 
 

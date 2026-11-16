@@ -24,6 +24,7 @@ REPO="Inkflow-Gab/nullxOpenS"
 RAW="https://raw.githubusercontent.com/$REPO/main"
 API_BASE="https://api.github.com/repos/$REPO"
 NULLX_TAG="${NULLX_TAG:-}"
+NULLX_MIN_VERSION="0.4.0"
 
 BASE_DIR="$HOME/.opencode-proxy"
 LOCAL_BIN="$HOME/.local/bin"
@@ -198,8 +199,26 @@ build_nullx() {
         go build -trimpath -ldflags "-s -w" -o "$LOCAL_BIN/nullx" . )
 }
 
+# A release older than the minimum misses the free-tier fixes, so it is
+# rebuilt from the source instead of being used as it is.
+version_is_older() {
+    local have="$1" want="$2"
+    [ -n "$have" ] || return 0
+    printf '%s\n%s\n' "$have" "$want" | sort -V | head -1 | grep -qx "$have"
+}
+
+nullx_version() {
+    "$LOCAL_BIN/nullx" version 2>/dev/null | awk '{print $2}' | head -1
+}
+
 if ! install_release; then
     warn "release binary not available, building from source"
+    if ! build_nullx; then
+        err "nullx was not installed"
+        exit 1
+    fi
+elif version_is_older "$(nullx_version)" "$NULLX_MIN_VERSION"; then
+    warn "the released nullx is older than $NULLX_MIN_VERSION, building from source"
     if ! build_nullx; then
         err "nullx was not installed"
         exit 1
@@ -237,6 +256,11 @@ fi
 
 info "checking free models"
 "$LOCAL_BIN/nullx" doctor || true
+
+if [ -x "$LOCAL_BIN/opencode-proxy" ]; then
+    info "checking the free tier"
+    "$LOCAL_BIN/opencode-proxy" bypass check || true
+fi
 
 echo
 ok "ready"

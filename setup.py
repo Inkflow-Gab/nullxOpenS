@@ -82,22 +82,50 @@ OPENCODE_UNLIMITED = LOCAL_BIN / "opencode-unlimited"
 OPENCODE_JSONC = CONFIG_DIR / "opencode.jsonc"
 BASHRC = HOME / ".bashrc"
 
+ARCH = os.uname().machine
+SYSTEM = "darwin" if sys.platform == "darwin" else "linux"
+
 ENGINE_VER = "v1.4.7"
+CLI_VER = "1.19.5"
+SETUP_URL = "https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py"
+
+
+def engine_asset():
+    """The release file of the gateway that fits this machine."""
+    machine = ARCH.lower()
+    if machine in ("x86_64", "amd64"):
+        arch = "amd64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "arm64"
+    else:
+        arch = machine
+    return f"opencode2api_{ENGINE_VER}_{SYSTEM}_{arch}.tar.gz"
+
+
+def cli_package():
+    """The npm package of the OpenCode CLI that fits this machine."""
+    machine = ARCH.lower()
+    if machine in ("x86_64", "amd64"):
+        arch = "x64"
+    elif machine in ("aarch64", "arm64"):
+        arch = "arm64"
+    else:
+        arch = machine
+    return f"opencode-{SYSTEM}-{arch}"
+
+
 ENGINE_URL = (
     "https://github.com/jasonxu114514/opencode2api/releases/download/"
-    f"{ENGINE_VER}/opencode2api_{ENGINE_VER}_linux_arm64.tar.gz"
+    f"{ENGINE_VER}/{engine_asset()}"
 )
-CLI_VER = "1.19.5"
 CLI_URL = (
-    "https://registry.npmjs.org/opencode-linux-arm64/-/"
-    f"opencode-linux-arm64-{CLI_VER}.tgz"
+    f"https://registry.npmjs.org/{cli_package()}/-/"
+    f"{cli_package()}-{CLI_VER}.tgz"
 )
-SETUP_URL = "https://raw.githubusercontent.com/Inkflow-Gab/nullxOpenS/main/setup.py"
 
 API_URL = "http://127.0.0.1:8080"
 API_KEY = "local-test-key"
 DASHBOARD_URL = "http://127.0.0.1:8081"
-ARCH = os.uname().machine
 
 PROVIDER = "opencode-unlimited-proxy"
 DEFAULT_MODEL = "deepseek-v4.1-flash-free"
@@ -529,6 +557,23 @@ def do_thinking(mode=""):
         models[DEFAULT_MODEL]["thinking"] = {"mode": mode, "enabled": mode != "none"}
 
     OPENCODE_JSONC.write_text(json.dumps(config, indent=2))
+
+    # The gateway has its own level for the clients that do not pick one.
+    gateway = gateway_config()
+    if gateway:
+        gateway.setdefault("reasoning", {})["effort"] = mode
+        CONFIG_FILE.write_text(json.dumps(gateway, indent=2))
+
+    # The nullx agent keeps its own level, so both stay in step.
+    nullx = nullx_config_path()
+    if nullx.exists():
+        try:
+            agent = json.loads(nullx.read_text())
+        except (OSError, json.JSONDecodeError):
+            agent = {}
+        agent["reasoning_effort"] = mode
+        nullx.write_text(json.dumps(agent, indent=2))
+
     ok(f"thinking mode set to {mode}")
     info("restart OpenCode to apply: opencode-unlimited restart")
 
@@ -558,7 +603,10 @@ def opencode_config(system_prompt=""):
                 "npm": "@ai-sdk/openai-compatible",
                 "name": PROVIDER,
                 "options": {"baseURL": f"{API_URL}/v1", "apiKey": API_KEY},
-                "models": {name: {} for name in MODEL_INFO},
+                # The rotation aliases walk a group of models and fail over
+                # on quota, rate limit or an upstream failure. They need a Go
+                # key in the gateway, so they are offered but not the default.
+                "models": {**{name: {} for name in MODEL_INFO}, "sota": {}, "sweet": {}},
             }
         },
     }
@@ -589,6 +637,12 @@ def write_config():
 
     CONFIG_FILE.write_text(json.dumps(config, indent=2))
     return config
+
+
+def nullx_config_path():
+    """Where the nullx agent keeps its configuration."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(HOME / ".config")
+    return Path(base) / "nullx" / "config.json"
 
 
 def gateway_config():
@@ -640,11 +694,13 @@ def gateway_models():
         free = "free" in model_id.lower()
         if isinstance(cost, dict) and cost.get("input") == 0 and cost.get("output") == 0:
             free = True
+        context = entry.get("context_window") or metadata.get("context_window") or 0
         models.append({
             "id": model_id,
             "free": free,
-            "ctx": entry.get("context_window") or 0,
-            "tools": bool(entry.get("tool_call")),
+            "ctx": context,
+            "tools": bool(entry.get("tool_call") or metadata.get("tool_call")),
+            "reasoning": bool(entry.get("reasoning") or metadata.get("reasoning")),
             "owner": entry.get("owned_by", ""),
         })
     return models
@@ -822,12 +878,34 @@ def find_binary(root_dir, name):
     return None
 
 
-def install_engine(dry_run=False):
+def installed_engine_version():
+    """The version of the gateway on this machine, empty when unknown."""
+    stamp = BASE_DIR / "engine.version"
+    if stamp.exists():
+        try:
+            value = stamp.read_text().strip()
+            if value:
+                return value
+        except OSError:
+            pass
+    health = gateway_health()
+    if health:
+        return str(health.get("version", "")).strip()
+    return ""
+
+
+def install_engine(dry_run=False, force=False):
     """Download the opencode2api gateway binary."""
     BIN_DIR.mkdir(parents=True, exist_ok=True)
-    if ENGINE_BIN.exists():
-        info("opencode2api is already installed")
-        return
+    current = installed_engine_version()
+    if ENGINE_BIN.exists() and not force:
+        if current and current == ENGINE_VER:
+            info(f"opencode2api {ENGINE_VER} is already installed")
+            return
+        if current:
+            info(f"opencode2api {current} is installed, upgrading to {ENGINE_VER}")
+        else:
+            info(f"opencode2api is installed, upgrading to {ENGINE_VER}")
 
     section("installing opencode2api")
     info(f"version: {ENGINE_VER}")
@@ -853,7 +931,11 @@ def install_engine(dry_run=False):
         shutil.copy2(binary, ENGINE_BIN)
     os.chmod(ENGINE_BIN, 0o755)
     tmp.unlink(missing_ok=True)
-    ok("opencode2api installed")
+    try:
+        (BASE_DIR / "engine.version").write_text(ENGINE_VER + "\n")
+    except OSError:
+        pass
+    ok(f"opencode2api {ENGINE_VER} installed")
 
 
 def validate_opencode_bin():
@@ -1075,6 +1157,138 @@ def status_daemon():
     info(f"dashboard : {DASHBOARD_URL}")
 
 
+def gateway_health():
+    """The gateway readiness document, empty when it does not answer."""
+    try:
+        with urllib.request.urlopen(API_URL + "/healthz", timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        try:
+            return json.loads(exc.read().decode())
+        except Exception:
+            return {}
+    except Exception:
+        return {}
+
+
+def bypass_report():
+    """Check every part of the free-tier path and name what is broken."""
+    section("free tier")
+
+    config = gateway_config()
+    anonymous = config.get("anonymous", True)
+    free_only = config.get("models", {}).get("free_only", True)
+    warp = config.get("warp", {})
+
+    if anonymous:
+        ok("anonymous access is on, the gateway uses the free lane")
+    else:
+        err("anonymous access is off, so no free model can be served")
+        info("turn it on with: opencode-proxy bypass enable")
+
+    if free_only:
+        ok("only free models are exposed")
+    else:
+        info("paid models are exposed too, which is fine with a key")
+
+    if warp.get("enabled"):
+        ok(f"warp is on (stack {warp.get('stack', 'ipv6')}, pool {warp.get('pool_size', 2)})")
+    else:
+        warn("warp is off, every request leaves from this machine's address")
+        info("the free tier blocks an address that is used too often")
+        info("turn it on with: opencode-proxy bypass enable")
+
+    health = gateway_health()
+    if not health:
+        err("the gateway does not answer on " + API_URL)
+        info("start it with: opencode-proxy start")
+        return False
+
+    status = health.get("status", "?")
+    ready = health.get("ready", False)
+    issues = health.get("issues", []) or []
+
+    if ready:
+        ok(f"the gateway is ready (status {status})")
+    else:
+        err(f"the gateway is not ready (status {status})")
+
+    warp_health = health.get("warp") or {}
+    if warp_health:
+        active = warp_health.get("active", 0)
+        if active > 0:
+            ok(f"{active} warp exit(s) are live")
+        else:
+            err("no warp exit is live, the free tier blocks a single address")
+            info("check that UDP port 2408 is open, then: opencode-proxy restart")
+
+    models = health.get("models", {})
+    exposed = models.get("exposed", 0)
+    total = models.get("total", 0)
+    if exposed:
+        ok(f"{exposed} free model(s) of {total} upstream")
+    else:
+        err("the gateway exposes no models")
+        info("the catalog may still be loading, wait a moment and run this again")
+
+    if issues:
+        for issue in issues:
+            if issue == "no_healthy_proxies":
+                warn("no proxy is healthy")
+                info("try: opencode-proxy fix-dns")
+            elif issue == "warp_unavailable":
+                warn("warp has no exit")
+            elif issue.startswith("model_catalog"):
+                warn(issue.replace("_", " "))
+            else:
+                warn(issue.replace("_", " "))
+
+    problem = log_problem()
+    if problem:
+        err(problem[0])
+        info(problem[1])
+
+    return ready and exposed > 0
+
+
+def do_bypass(action="status"):
+    """Diagnose and repair the free-tier path."""
+    if action in ("enable", "on"):
+        config = gateway_config() or {}
+        config.setdefault("warp", {})
+        config["warp"]["enabled"] = True
+        config["warp"].setdefault("stack", "ipv6")
+        config["warp"].setdefault("pool_size", 4)
+        config["anonymous"] = True
+        config.setdefault("models", {})["free_only"] = True
+        CONFIG_FILE.write_text(json.dumps(config, indent=2))
+        ok("the free lane is on: anonymous access, warp and free models only")
+        info("restart the gateway to apply: opencode-proxy restart")
+        return
+
+    if action in ("disable", "off"):
+        config = gateway_config() or {}
+        config.setdefault("warp", {})["enabled"] = False
+        CONFIG_FILE.write_text(json.dumps(config, indent=2))
+        ok("warp is off")
+        info("restart the gateway to apply: opencode-proxy restart")
+        return
+
+    if action in ("fix", "repair"):
+        fix_certs()
+        do_fix_dns()
+        restart_daemon()
+        bypass_report()
+        return
+
+    if action == "check":
+        bypass_report()
+        return
+
+    err(f"unknown bypass action: {action}")
+    info("usage: opencode-proxy bypass {status|check|enable|disable|fix}")
+
+
 # --- proxy commands --------------------------------------------------------
 
 
@@ -1193,12 +1407,6 @@ def do_rate_limit():
     info("restart the proxy: opencode-proxy restart")
 
 
-def nullx_config_path():
-    """Where the nullx agent keeps its configuration."""
-    base = os.environ.get("XDG_CONFIG_HOME") or str(HOME / ".config")
-    return Path(base) / "nullx" / "config.json"
-
-
 def do_models(subcmd="list"):
     """List the models the gateway offers right now."""
     if subcmd not in ("list", "best"):
@@ -1239,14 +1447,15 @@ def do_models(subcmd="list"):
         return
 
     print()
-    print(f"  {DIM}{'model':<35} {'context':<9} free{NC}")
+    print(f"  {DIM}{'model':<35} {'context':<9} tools{NC}")
     for model in sorted(free, key=lambda m: (not m["tools"], m["id"])):
-        mark = f"{GREEN}yes{NC}" if model["free"] else "no"
+        mark = f"{GREEN}yes{NC}" if model["tools"] else f"{DIM}no{NC}"
         ctx = model["ctx"] if model["ctx"] else "?"
         print(f"  {GREEN}{model['id']:<35}{NC} {BLUE}{str(ctx):<9}{NC} {mark}")
     if paid and not gateway_config().get("models", {}).get("free_only", True):
         for model in sorted(paid, key=lambda m: m["id"]):
-            print(f"  {DIM}{model['id']:<35}{NC} {DIM}{str(model['ctx'] or '?'):<9}{NC} no")
+            mark = f"{GREEN}yes{NC}" if model["tools"] else f"{DIM}no{NC}"
+            print(f"  {DIM}{model['id']:<35}{NC} {DIM}{str(model['ctx'] or '?'):<9}{NC} {mark}")
     print()
     info("switch the default model: opencode-proxy model <model-id>")
 
@@ -1317,7 +1526,7 @@ def do_doctor():
 
     py = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     checks.append(("python", py, True))
-    checks.append(("architecture", ARCH, ARCH in ("aarch64", "arm64")))
+    checks.append(("architecture", ARCH, supported_platform()))
 
     env = detect_env()
     checks.append(("environment", env, True))
@@ -1348,23 +1557,35 @@ def do_doctor():
     bundle = find_ca_bundle()
     checks.append(("ca certificates", str(bundle) if bundle else "missing", bundle is not None))
 
-    if healthy:
-        try:
-            health = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=3).read().decode())
-            warp = health.get("warp", {})
+    health = gateway_health()
+    if health:
+        checks.append((
+            "gateway readiness",
+            f"{health.get('status', '?')} (ready {health.get('ready', False)})",
+            bool(health.get("ready")),
+        ))
+        warp = health.get("warp") or {}
+        if warp:
             checks.append((
                 "warp egress",
                 f"{warp.get('status', '?')} (active {warp.get('active', '?')}, standby {warp.get('standby', '?')})",
-                warp.get("status") not in ("error", "failed"),
+                warp.get("active", 0) > 0,
             ))
-            models = health.get("models", {})
-            checks.append((
-                "free models",
-                f"{models.get('exposed', '?')} of {models.get('total', '?')} upstream",
-                bool(models.get("exposed")),
-            ))
-        except Exception:
-            pass
+        models = health.get("models", {})
+        checks.append((
+            "free models",
+            f"{models.get('exposed', '?')} of {models.get('total', '?')} upstream",
+            bool(models.get("exposed")),
+        ))
+        keys = health.get("keys", {})
+        checks.append((
+            "anonymous access",
+            "on" if keys.get("anonymous") else "off",
+            bool(keys.get("anonymous")),
+        ))
+        issues = health.get("issues") or []
+        if issues:
+            checks.append(("gateway issues", ", ".join(issues), False))
 
     checks.append(("thinking mode", thinking_indicator(), True))
 
@@ -1405,6 +1626,8 @@ def do_doctor():
         info(f"or in this shell: export PATH=\"{LOCAL_BIN}:$PATH\"")
     if bundle is None:
         info("install the CA bundle the gateway needs: opencode-proxy fix-certs")
+    if not healthy:
+        info("check the free tier in detail: opencode-proxy bypass")
 
 
 def do_validate():
@@ -1529,7 +1752,7 @@ def do_continue():
 
 
 def do_update():
-    """Fetch the latest setup.py from GitHub."""
+    """Fetch the latest setup.py and the newest gateway from GitHub."""
     section("updating")
     try:
         tmp = BASE_DIR / "setup.py.new"
@@ -1540,6 +1763,11 @@ def do_update():
         ok("setup.py updated, run the installer again to apply")
     except Exception as e:
         err(f"update failed: {e}")
+        return
+
+    install_engine(force=True)
+    write_config()
+    info("restart the gateway to use the new version: opencode-proxy restart")
 
 
 def do_backup():
@@ -1605,16 +1833,29 @@ def do_uninstall():
 
 
 def do_watchdog():
-    """Restart the gateway whenever it stops answering."""
+    """Restart the gateway whenever it stops answering.
+
+    A gateway whose WARP pool lost every exit is restarted too: a fresh
+    registration gives the requests a new address, which is what clears a
+    free tier that blocked the old one.
+    """
     section("watchdog")
     info("watching the proxy, ctrl+c to stop")
     try:
         while True:
-            if not health_ok():
+            health = gateway_health()
+            if not health:
                 warn("proxy is down, restarting it")
                 stop_daemon(dry_run=True)
                 time.sleep(1)
                 start_daemon(dry_run=True)
+            elif not health.get("ready", False):
+                issues = health.get("issues") or []
+                if "warp_unavailable" in issues or "model_catalog_empty" in issues:
+                    warn("the free lane is down (" + ", ".join(issues) + "), restarting it")
+                    stop_daemon(dry_run=True)
+                    time.sleep(1)
+                    start_daemon(dry_run=True)
             time.sleep(30)
     except KeyboardInterrupt:
         info("watchdog stopped")
@@ -1670,8 +1911,9 @@ case "$1" in
     thinking)  python3 "$SETUP" thinking "${2:-}" ;;
     rate-limit) python3 "$SETUP" rate-limit ;;
     autostart) python3 "$SETUP" autostart "${2:-}" ;;
+    bypass)    python3 "$SETUP" bypass "${2:-status}" ;;
     *)
-        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|fix-certs|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}}"
+        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|fix-certs|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}|bypass {status|check|enable|disable|fix}}"
         exit 1
         ;;
 esac
@@ -1963,9 +2205,15 @@ def step(label, func, *args, **kwargs):
         return False
 
 
+def supported_platform():
+    """True when this machine has a build of the gateway and the CLI."""
+    machine = ARCH.lower()
+    return machine in ("aarch64", "arm64", "x86_64", "amd64")
+
+
 def do_install():
-    if ARCH not in ("aarch64", "arm64"):
-        err(f"{ARCH} is not supported, this needs aarch64")
+    if not supported_platform():
+        err(f"{ARCH} is not supported, this needs aarch64 or x86_64")
         sys.exit(1)
 
     section("OpenCode UNLIMITED setup")
@@ -1986,6 +2234,11 @@ def do_install():
         failed.append("dependencies")
     if not step("installing the gateway", install_engine):
         failed.append("gateway")
+    if not ENGINE_BIN.exists():
+        err("the gateway binary is missing")
+        info(f"download it by hand from {ENGINE_URL}")
+        info(f"save it as {ENGINE_BIN} and make it executable")
+        failed.append("gateway binary")
     if not step("writing the configuration", write_config):
         failed.append("configuration")
     if not step("writing the commands", write_manager):
@@ -2057,7 +2310,7 @@ ACTIONS = [
     "logs", "update", "uninstall", "backup", "restore", "watchdog", "version",
     "validate", "dry-run", "models", "model", "config", "doctor", "continue",
     "fix-dns", "fix-certs", "zoom-in", "zoom-out", "zoom-reset", "thinking",
-    "rate-limit", "autostart",
+    "rate-limit", "autostart", "bypass",
 ]
 
 
@@ -2129,6 +2382,8 @@ def main():
         do_rate_limit()
     elif action == "autostart":
         do_autostart(args.model)
+    elif action == "bypass":
+        do_bypass(args.model or "status")
 
 
 if __name__ == "__main__":

@@ -69,13 +69,24 @@ if [ -n "$MISSING" ]; then
     if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y >/dev/null 2>&1 || true
         # shellcheck disable=SC2086
-        apt-get install -y $MISSING
+        apt-get install -y $MISSING || warn "could not install:$MISSING"
     else
         pkg update -y >/dev/null 2>&1 || true
         # shellcheck disable=SC2086
-        pkg install -y $MISSING
+        pkg install -y $MISSING || warn "could not install:$MISSING"
     fi
 fi
+
+# The rest of the installer needs these two. The CA bundle is not on this
+# list: the gateway is started with the bundle it finds, and
+# "opencode-proxy fix-certs" installs one when there is none.
+for tool in python3 curl; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        err "$tool is missing, the installer cannot continue"
+        info "install it with: apt-get install -y $tool"
+        exit 1
+    fi
+done
 
 # --- release tag -----------------------------------------------------------
 
@@ -87,7 +98,7 @@ release_tag() {
 if [ -z "$NULLX_TAG" ]; then
     NULLX_TAG=$(release_tag)
 fi
-[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.3.0"
+[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.4.0"
 info "release: $NULLX_TAG"
 
 # --- source ----------------------------------------------------------------
@@ -204,7 +215,8 @@ build_nullx() {
 version_is_older() {
     local have="$1" want="$2"
     [ -n "$have" ] || return 0
-    printf '%s\n%s\n' "$have" "$want" | sort -V | head -1 | grep -qx "$have"
+    [ "$have" = "$want" ] && return 1
+    [ "$(printf '%s\n%s\n' "$have" "$want" | sort -V | head -1)" = "$have" ]
 }
 
 nullx_version() {
@@ -270,6 +282,7 @@ printf '  %bnullx "fix the tests"%b   one-shot prompt\n' "$GREEN" "$NC"
 printf '  %bnullx models -free%b     list free models\n' "$GREEN" "$NC"
 printf '  %bnullx doctor%b           end-to-end check\n' "$GREEN" "$NC"
 printf '  %bopencode-proxy status%b  gateway status\n' "$GREEN" "$NC"
+printf '  %bopencode-proxy bypass%b  check the free lane\n' "$GREEN" "$NC"
 echo
 printf '  %bapi%b http://127.0.0.1:8080/v1\n' "$DIM" "$NC"
 printf '  %bdocs%b NULLX.md\n' "$DIM" "$NC"

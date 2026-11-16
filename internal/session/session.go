@@ -95,6 +95,16 @@ func List(dir string) ([]Meta, error) {
 	return metas, nil
 }
 
+// Latest returns the metadata of the newest session in dir. It reports false
+// when there is none.
+func Latest(dir string) (Meta, bool) {
+	metas, err := List(dir)
+	if err != nil || len(metas) == 0 {
+		return Meta{}, false
+	}
+	return metas[0], true
+}
+
 // Save writes the session atomically.
 func (s *Session) Save() error {
 	if s.path == "" {

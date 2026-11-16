@@ -79,6 +79,7 @@ Flags for run and the shell:
   -config PATH      configuration file
   -model ID         override the model
   -permission MODE  ask, allow, or deny
+  -resume           continue the most recent session
 `)
 }
 
@@ -86,6 +87,7 @@ type options struct {
 	configPath string
 	model      string
 	permission string
+	resume     bool
 }
 
 func parseOptions(name string, args []string) (options, []string, error) {
@@ -95,6 +97,7 @@ func parseOptions(name string, args []string) (options, []string, error) {
 	flags.StringVar(&opts.configPath, "config", "", "configuration file")
 	flags.StringVar(&opts.model, "model", "", "model ID")
 	flags.StringVar(&opts.permission, "permission", "", "ask, allow, or deny")
+	flags.BoolVar(&opts.resume, "resume", false, "continue the most recent session")
 	if err := flags.Parse(args); err != nil {
 		return opts, nil, err
 	}
@@ -122,6 +125,20 @@ func loadConfig(opts options) (config.Config, string, error) {
 	return cfg, path, nil
 }
 
+// openSession returns the session to work in: the most recent one when resume
+// is asked for, a fresh one otherwise.
+func openSession(resume bool) (*session.Session, error) {
+	dir := filepath.Join(config.DataDir(), "sessions")
+	if resume {
+		if meta, ok := session.Latest(dir); ok {
+			if saved, err := session.Load(dir, meta.ID); err == nil {
+				return saved, nil
+			}
+		}
+	}
+	return session.New(dir)
+}
+
 func build(cfg config.Config, screen *ui.UI, sess *session.Session) *agent.Agent {
 	client := llm.New(cfg.BaseURL, cfg.APIKey, time.Duration(cfg.Timeout)*time.Second)
 	return agent.New(cfg, client, tools.Builtins(), screen, sess)
@@ -140,7 +157,7 @@ func repl(ctx context.Context, args []string) error {
 		return err
 	}
 	screen := ui.New(os.Stdin, os.Stdout)
-	sess, err := session.New(filepath.Join(config.DataDir(), "sessions"))
+	sess, err := openSession(opts.resume)
 	if err != nil {
 		return err
 	}
@@ -239,7 +256,7 @@ func runOnce(args []string) error {
 		return err
 	}
 	screen := ui.New(os.Stdin, os.Stdout)
-	sess, err := session.New(filepath.Join(config.DataDir(), "sessions"))
+	sess, err := openSession(opts.resume)
 	if err != nil {
 		return err
 	}

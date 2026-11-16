@@ -348,7 +348,7 @@ func doctor(args []string) error {
 	fmt.Printf("api key: %s\n", keyStatus(cfg.APIKey))
 
 	health, healthErr := client.Health(ctx)
-	if healthErr != nil {
+	if healthErr != nil && health.Status == "" {
 		fmt.Printf("health: FAIL (%v)\n", healthErr)
 	} else {
 		fmt.Printf("health: %s (ready=%v)\n", health.Status, health.Ready)

@@ -137,6 +137,7 @@ type Model struct {
 	totalModels  int
 	warpText     string
 	billingText  string
+	issueText    string
 
 	busy        bool
 	cancel      context.CancelFunc
@@ -501,12 +502,12 @@ func (m *Model) checkHealth() tea.Cmd {
 }
 
 func (m *Model) applyHealth(message healthMsg) {
-	if message.err != nil {
+	document := message.document
+	if message.err != nil && document.Status == "" {
 		m.healthOK = false
 		m.healthText = "gateway down"
 		return
 	}
-	document := message.document
 	status := document.Status
 	if status == "" {
 		status = "?"
@@ -524,6 +525,13 @@ func (m *Model) applyHealth(message healthMsg) {
 		}
 	}
 	m.healthText = fmt.Sprintf("%s · %d free/%d", status, m.freeModels, m.totalModels)
+
+	// The gateway names what keeps it from serving, so the agent can say so
+	// instead of only reporting that something is off.
+	m.issueText = ""
+	if issues := document.Blocking(); len(issues) > 0 {
+		m.issueText = strings.Join(issues, ", ")
+	}
 }
 
 func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
@@ -634,7 +642,7 @@ func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
 			m.addSystem("thinking collapsed")
 		}
 	case "/status":
-		for _, text := range []string{
+		lines := []string{
 			"gateway: " + m.healthText,
 			"warp: " + m.warpText,
 			m.billingText,
@@ -642,7 +650,12 @@ func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
 			"effort: " + valueOr(m.runner.Config.ReasoningEffort, "none"),
 			"permission: " + m.runner.Config.Permission,
 			fmt.Sprintf("session: %s · %d messages", m.sess.ID, m.runner.HistoryCount()),
-		} {
+		}
+		if m.issueText != "" {
+			lines = append(lines, "blocked by: "+m.issueText)
+			lines = append(lines, "check it with: opencode-proxy bypass")
+		}
+		for _, text := range lines {
 			m.addSystem(text)
 		}
 	case "/sessions":

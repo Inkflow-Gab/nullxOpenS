@@ -1038,11 +1038,24 @@ def get_pid():
 
 
 def health_ok():
+    """True when the gateway answers, ready or not.
+
+    The gateway answers 503 while it is still starting, for example when the
+    WARP pool has no exit yet or the model catalog is still loading. That is
+    not a failure, so only a missing answer counts as down.
+    """
     try:
         urllib.request.urlopen(API_URL + "/healthz", timeout=2)
         return True
+    except urllib.error.HTTPError:
+        return True
     except Exception:
         return False
+
+
+def gateway_ready():
+    """True when the gateway says it can serve requests."""
+    return bool(gateway_health().get("ready"))
 
 
 def start_daemon(dry_run=False):
@@ -1078,6 +1091,11 @@ def start_daemon(dry_run=False):
         for _ in range(15):
             if health_ok():
                 ok("proxy is online")
+                health = gateway_health()
+                if health and not health.get("ready"):
+                    issues = ", ".join(health.get("issues") or [])
+                    warn("the gateway is still starting" + (f": {issues}" if issues else ""))
+                    info("check the free lane with: opencode-proxy bypass")
                 info(f"api       : {API_URL}/v1")
                 info(f"dashboard : {DASHBOARD_URL}")
                 info(f"api key   : {API_KEY}")
@@ -1142,16 +1160,27 @@ def status_daemon():
         return
 
     ok(f"running (pid {pid})")
-    try:
-        data = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=3).read().decode())
-        warp = data.get("warp", {})
+    data = gateway_health()
+    if data:
+        status = data.get("status", "?")
+        ready = data.get("ready", False)
+        if ready:
+            ok(f"status    : {status}")
+        else:
+            issues = ", ".join(data.get("issues") or [])
+            warn(f"status    : {status}" + (f" ({issues})" if issues else ""))
+        warp = data.get("warp") or {}
+        if warp:
+            info(
+                f"warp      : {warp.get('status', '?')} "
+                f"(active {warp.get('active', '?')}, standby {warp.get('standby', '?')})"
+            )
         models = data.get("models", {})
-        info(
-            f"warp      : {warp.get('status', '?')} "
-            f"(active {warp.get('active', '?')}, standby {warp.get('standby', '?')})"
-        )
         info(f"models    : {models.get('exposed', '?')} free of {models.get('total', '?')} upstream")
-    except Exception:
+        version = data.get("version")
+        if version:
+            info(f"version   : {version}")
+    else:
         warn("gateway is starting or unreachable")
     info(f"api       : {API_URL}/v1")
     info(f"dashboard : {DASHBOARD_URL}")
@@ -1559,10 +1588,11 @@ def do_doctor():
 
     health = gateway_health()
     if health:
+        ready = bool(health.get("ready"))
         checks.append((
             "gateway readiness",
-            f"{health.get('status', '?')} (ready {health.get('ready', False)})",
-            bool(health.get("ready")),
+            f"{health.get('status', '?')} (ready {ready})",
+            ready,
         ))
         warp = health.get("warp") or {}
         if warp:
@@ -1618,6 +1648,13 @@ def do_doctor():
     if not healthy:
         info("start the gateway: opencode-proxy start")
         info("then fix dns if it still cannot connect: opencode-proxy fix-dns")
+    elif health and not health.get("ready"):
+        info("the gateway answers but is not ready, check the free lane: opencode-proxy bypass")
+        issues = health.get("issues") or []
+        if "warp_unavailable" in issues:
+            info("no warp exit: check that UDP port 2408 is open, then opencode-proxy restart")
+        if "no_healthy_proxies" in issues:
+            info("no healthy proxy: opencode-proxy fix-dns, then opencode-proxy restart")
     if not routed:
         info("repoint OpenCode at the proxy: python3 setup.py install")
         info("or inspect the current config: opencode-proxy config")

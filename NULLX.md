@@ -208,6 +208,7 @@ rotation, set `"model": "sota"` and configure a Go key in the gateway.
 | Command | Purpose |
 | --- | --- |
 | `nullx` | Interactive shell (REPL). |
+| `nullx --resume` | Continue the most recent session. |
 | `nullx run "prompt"` | One prompt, one answer, exit. |
 | `nullx models [-free]` | List gateway model IDs, context windows, tool support, and free markers. |
 | `nullx doctor` | Check the gateway, credentials, and free-model availability. |
@@ -271,7 +272,7 @@ self-documenting tool pattern.
 | --- | --- |
 | `read` | Read a file with line numbers. Supports `offset` and `limit`. |
 | `write` | Create or overwrite a file, creating parent directories. |
-| `edit` | Replace the first exact occurrence of `old` with `new`. |
+| `edit` | Replace the first exact occurrence of `old` with `new`. Accepts the official `filePath`/`oldString`/`newString`/`replaceAll` names too. |
 | `ls` | List a directory. |
 | `bash` | Run a shell command with a timeout; returns combined output. |
 | `glob` | Find files with `*`, `?`, and `**` segments. |
@@ -330,9 +331,10 @@ reasoning level, the agent drops the level and asks again on its own.
 
 Conversations are written to `<data-dir>/sessions/<id>.json` after every
 message and tool result, atomically (temp file + rename). `nullx sessions`
-lists them. This is deliberately simpler than Crush's SQLite layer; the model
-is the same message stream, so a SQLite backend can replace the store later
-without touching the agent loop.
+lists them, and `nullx --resume` continues the most recent one. This is
+deliberately simpler than Crush's SQLite layer; the model is the same message
+stream, so a SQLite backend can replace the store later without touching the
+agent loop.
 
 ## Design map (Crush → nullx)
 

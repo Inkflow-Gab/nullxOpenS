@@ -18,6 +18,7 @@ model end to end.
 
 ```bash
 nullx                     # interactive shell
+nullx --resume            # continue the last session
 nullx "fix the tests"     # one-shot prompt
 nullx models -free        # free models the gateway exposes
 nullx doctor              # gateway + free-model check

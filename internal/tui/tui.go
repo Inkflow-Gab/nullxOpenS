@@ -856,8 +856,7 @@ func (m *Model) headerView(width int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + right + "\n" +
-		dimStyle.Render(strings.Repeat("─", width))
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func (m *Model) inputView(width int) string {
@@ -877,7 +876,7 @@ func (m *Model) statusView(width int) string {
 	if !m.healthOK {
 		healthStyle = badStyle
 	}
-	line := healthStyle.Render("● ") + dimStyle.Render("gateway "+m.healthText)
+	line := healthStyle.Render("* ") + dimStyle.Render("gateway "+m.healthText)
 	if m.busy {
 		line = " " + m.spin.View() + " " + line
 	}
@@ -921,7 +920,7 @@ func (m *Model) renderEntry(e entry, width int) string {
 	case entryUser:
 		return userStyle.Render("› ") + wrapText(e.text, width-2)
 	case entryAssistant:
-		return accentStyle.Render("● ") + wrapText(e.text, width-2)
+		return accentStyle.Render("* ") + wrapText(e.text, width-2)
 	case entryThinking:
 		if !m.showThinking {
 			lines := strings.Count(strings.TrimSpace(e.text), "\n") + 1
@@ -940,7 +939,7 @@ func (m *Model) renderEntry(e entry, width int) string {
 		var builder strings.Builder
 		for i, line := range lines {
 			if i == 0 {
-				builder.WriteString(resultStyle.Render("  ⎿ " + line))
+				builder.WriteString(resultStyle.Render("  -> " + line))
 				continue
 			}
 			builder.WriteString("\n" + resultStyle.Render("    "+line))

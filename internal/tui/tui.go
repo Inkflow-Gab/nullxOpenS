@@ -103,7 +103,7 @@ type editorDoneMsg struct {
 }
 
 type healthMsg struct {
-	document map[string]any
+	document llm.Health
 	err      error
 }
 
@@ -137,6 +137,7 @@ type Model struct {
 	totalModels  int
 	warpText     string
 	billingText  string
+	issueText    string
 
 	busy        bool
 	cancel      context.CancelFunc
@@ -501,29 +502,36 @@ func (m *Model) checkHealth() tea.Cmd {
 }
 
 func (m *Model) applyHealth(message healthMsg) {
-	if message.err != nil {
+	document := message.document
+	if message.err != nil && document.Status == "" {
 		m.healthOK = false
 		m.healthText = "gateway down"
 		return
 	}
-	status := asString(message.document["status"])
+	status := document.Status
 	if status == "" {
 		status = "?"
 	}
-	ready, _ := message.document["ready"].(bool)
-	m.healthOK = ready || status == "ok" || status == "ready"
+	// A degraded gateway still answers, so it is not shown as down. Only a
+	// gateway that refuses to serve counts as down.
+	m.healthOK = document.Ready || status == "ok" || status == "ready" || status == "degraded" || status == "starting"
 
-	if models, ok := message.document["models"].(map[string]any); ok {
-		m.freeModels = asInt(models["exposed"])
-		m.totalModels = asInt(models["total"])
-	}
-	if warp, ok := message.document["warp"].(map[string]any); ok {
-		m.warpText = "warp " + asString(warp["status"])
-		if active := asInt(warp["active"]); active > 0 {
-			m.warpText += fmt.Sprintf(" %d", active)
+	m.freeModels = document.Models.Exposed
+	m.totalModels = document.Models.Total
+	if document.Warp != nil {
+		m.warpText = "warp " + document.Warp.Status
+		if document.Warp.Active > 0 {
+			m.warpText += fmt.Sprintf(" %d", document.Warp.Active)
 		}
 	}
 	m.healthText = fmt.Sprintf("%s · %d free/%d", status, m.freeModels, m.totalModels)
+
+	// The gateway names what keeps it from serving, so the agent can say so
+	// instead of only reporting that something is off.
+	m.issueText = ""
+	if issues := document.Blocking(); len(issues) > 0 {
+		m.issueText = strings.Join(issues, ", ")
+	}
 }
 
 func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
@@ -634,7 +642,7 @@ func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
 			m.addSystem("thinking collapsed")
 		}
 	case "/status":
-		for _, text := range []string{
+		lines := []string{
 			"gateway: " + m.healthText,
 			"warp: " + m.warpText,
 			m.billingText,
@@ -642,7 +650,12 @@ func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
 			"effort: " + valueOr(m.runner.Config.ReasoningEffort, "none"),
 			"permission: " + m.runner.Config.Permission,
 			fmt.Sprintf("session: %s · %d messages", m.sess.ID, m.runner.HistoryCount()),
-		} {
+		}
+		if m.issueText != "" {
+			lines = append(lines, "blocked by: "+m.issueText)
+			lines = append(lines, "check it with: opencode-proxy bypass")
+		}
+		for _, text := range lines {
 			m.addSystem(text)
 		}
 	case "/sessions":
@@ -843,8 +856,7 @@ func (m *Model) headerView(width int) string {
 	if gap < 1 {
 		gap = 1
 	}
-	return left + strings.Repeat(" ", gap) + right + "\n" +
-		dimStyle.Render(strings.Repeat("─", width))
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func (m *Model) inputView(width int) string {
@@ -864,7 +876,7 @@ func (m *Model) statusView(width int) string {
 	if !m.healthOK {
 		healthStyle = badStyle
 	}
-	line := healthStyle.Render("● ") + dimStyle.Render("gateway "+m.healthText)
+	line := healthStyle.Render("* ") + dimStyle.Render("gateway "+m.healthText)
 	if m.busy {
 		line = " " + m.spin.View() + " " + line
 	}
@@ -908,7 +920,7 @@ func (m *Model) renderEntry(e entry, width int) string {
 	case entryUser:
 		return userStyle.Render("› ") + wrapText(e.text, width-2)
 	case entryAssistant:
-		return accentStyle.Render("● ") + wrapText(e.text, width-2)
+		return accentStyle.Render("* ") + wrapText(e.text, width-2)
 	case entryThinking:
 		if !m.showThinking {
 			lines := strings.Count(strings.TrimSpace(e.text), "\n") + 1
@@ -927,7 +939,7 @@ func (m *Model) renderEntry(e entry, width int) string {
 		var builder strings.Builder
 		for i, line := range lines {
 			if i == 0 {
-				builder.WriteString(resultStyle.Render("  ⎿ " + line))
+				builder.WriteString(resultStyle.Render("  -> " + line))
 				continue
 			}
 			builder.WriteString("\n" + resultStyle.Render("    "+line))
@@ -961,21 +973,4 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func asString(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func asInt(value any) int {
-	switch number := value.(type) {
-	case float64:
-		return int(number)
-	case int:
-		return number
-	case int64:
-		return int(number)
-	}
-	return 0
 }

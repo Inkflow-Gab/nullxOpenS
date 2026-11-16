@@ -18,6 +18,7 @@ func registerBash(r *Registry) {
 		Description: "Run a shell command in the working directory and return its combined output.",
 		Parameters: object(map[string]any{
 			"command":         stringProperty("Command to run."),
+			"workdir":         stringProperty("Directory to run the command in."),
 			"timeout_seconds": integerProperty("Timeout in seconds (default 120)."),
 		}, "command"),
 		Run: runBash,
@@ -28,6 +29,7 @@ type bashArgs struct {
 	Command        string `json:"command"`
 	Cmd            string `json:"cmd"`
 	Script         string `json:"script"`
+	Code           string `json:"code"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
 	TimeoutMS      int    `json:"timeout"`
 	Workdir        string `json:"workdir"`
@@ -38,7 +40,9 @@ func runBash(ctx context.Context, raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
 	}
-	command := firstNonEmpty(args.Command, args.Cmd, args.Script)
+	// "code" is the name the official OpenCode execute tool uses, which the
+	// gateway can put on the wire on the free lane.
+	command := firstNonEmpty(args.Command, args.Cmd, args.Script, args.Code)
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("command is required")
 	}

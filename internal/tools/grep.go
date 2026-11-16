@@ -30,9 +30,11 @@ func registerGrep(r *Registry) {
 }
 
 type grepArgs struct {
-	Pattern string `json:"pattern"`
-	Path    string `json:"path"`
-	Include string `json:"include"`
+	Pattern       string `json:"pattern"`
+	Path          string `json:"path"`
+	Include       string `json:"include"`
+	Literal       bool   `json:"literal"`
+	CaseSensitive bool   `json:"caseSensitive"`
 }
 
 func runGrep(_ context.Context, raw json.RawMessage) (string, error) {
@@ -40,9 +42,21 @@ func runGrep(_ context.Context, raw json.RawMessage) (string, error) {
 	if err := json.Unmarshal(raw, &args); err != nil {
 		return "", err
 	}
-	expression, err := regexp.Compile(args.Pattern)
+	pattern := args.Pattern
+	if args.Literal {
+		// The official OpenCode grep has a literal mode, where the pattern is
+		// matched as plain text instead of a regular expression.
+		pattern = regexp.QuoteMeta(pattern)
+	}
+	expression, err := regexp.Compile(pattern)
 	if err != nil {
 		return "", fmt.Errorf("invalid pattern: %w", err)
+	}
+	if !args.CaseSensitive {
+		expression, err = regexp.Compile("(?i)" + expression.String())
+		if err != nil {
+			return "", fmt.Errorf("invalid pattern: %w", err)
+		}
 	}
 	root := args.Path
 	if strings.TrimSpace(root) == "" {

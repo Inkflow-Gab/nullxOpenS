@@ -21,6 +21,7 @@ import (
 var toolAliases = map[string]string{
 	"bash":     "bash",
 	"shell":    "bash",
+	"execute":  "bash",
 	"terminal": "bash",
 	"read":     "read",
 	"view":     "read",
@@ -89,6 +90,9 @@ func (a *Agent) Run(ctx context.Context, input string) error {
 		}
 		result, err := a.stream(ctx, request)
 		if err != nil {
+			if hint := freeTierHint(err); hint != "" {
+				a.UI.Printf("\n%s", hint)
+			}
 			return err
 		}
 		a.UI.Newline()
@@ -129,6 +133,14 @@ func (a *Agent) stream(ctx context.Context, request llm.ChatRequest) (llm.Result
 		return result, err
 	}
 	result, err := send(request)
+	if err != nil && isReasoningError(err) && request.ReasoningEffort != "" {
+		// The free catalog mixes models with and without a reasoning mode.
+		// When the chosen one refuses the level, drop it and ask again.
+		a.UI.Printf("\n%s does not take a reasoning level; asking without one", request.Model)
+		request.ReasoningEffort = ""
+		a.Config.ReasoningEffort = "none"
+		result, err = send(request)
+	}
 	if err == nil || !isModelError(err) {
 		return result, err
 	}
@@ -163,6 +175,42 @@ func reasoningEffort(value string) string {
 	return value
 }
 
+// freeTierHint recognises the errors the gateway raises when the free lane is
+// not usable: the egress IP is blocked, or the anonymous lane is paused. Both
+// clear on their own after a while, so the message says what to do instead of
+// pointing at the model.
+func freeTierHint(err error) string {
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "free tier blocked") ||
+		strings.Contains(text, "abusive traffic") ||
+		strings.Contains(text, "abuse of traffic") ||
+		strings.Contains(text, "not available from your current network"):
+		return "the free tier blocked this exit. The gateway rotates exits on its own; wait a minute and send the request again."
+	case strings.Contains(text, "anonymous free tier is paused") ||
+		strings.Contains(text, "anonymous lane paused"):
+		return "the gateway paused the free lane after repeated failures. Wait a few minutes, or restart it with: opencode-proxy restart"
+	case strings.Contains(text, "warp") && strings.Contains(text, "unavailable"):
+		return "the gateway has no WARP exit. Run: opencode-proxy fix-certs, then opencode-proxy restart"
+	}
+	return ""
+}
+
+// isReasoningError recognises the rejection a model answers with when the
+// requested reasoning level is not one it knows.
+func isReasoningError(err error) bool {
+	text := strings.ToLower(err.Error())
+	if !strings.Contains(text, "reasoning") && !strings.Contains(text, "thinking") {
+		return false
+	}
+	for _, marker := range []string{"400", "invalid", "not supported", "unsupported", "unknown"} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func isModelError(err error) bool {
 	text := strings.ToLower(err.Error())
 	for _, marker := range []string{"404", "model_not_found", "was not found", "not available"} {
@@ -181,7 +229,7 @@ func (a *Agent) runTool(ctx context.Context, call llm.ToolCall) string {
 		}
 	}
 	if !ok {
-		return fmt.Sprintf("error: unknown tool %q; available tools are read, write, edit, ls, bash, glob, grep", call.Function.Name)
+		return fmt.Sprintf("error: the tool %q is not available here. Use one of: read, write, edit, ls, bash, glob, grep", call.Function.Name)
 	}
 	args := json.RawMessage(call.Function.Arguments)
 	if len(args) == 0 {

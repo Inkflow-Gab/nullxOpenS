@@ -9,9 +9,11 @@ OpenAI Chat Completions protocol, so any OpenAI-compatible gateway works, and
 ships with first-class support for the opencode2api rotation groups (`sota` /
 `sweet`), key pools, proxy rotation, and WARP egress.
 
-> Status: v0.3.0 — Bubble Tea TUI with collapsible reasoning, live gateway and
+> Status: v0.4.0 — Bubble Tea TUI with collapsible reasoning, live gateway and
 > free-tier status, OpenCode-style commands, streaming, tools, permissions, and
-> sessions. LSP and MCP are the next layers (see Roadmap).
+> sessions. The free lane now picks a model that can actually call tools, and
+> the agent recovers on its own when the upstream refuses a reasoning level.
+> LSP and MCP are the next layers (see Roadmap).
 
 ## Why this exists
 
@@ -54,6 +56,7 @@ nullx "explain this repo" # one-shot prompt
 nullx models -free        # list free models
 nullx doctor              # gateway + free-model check
 opencode-proxy status     # gateway control
+opencode-proxy bypass     # check the free lane
 ```
 
 `nullx` auto-reads the first `server_keys` entry from
@@ -142,9 +145,48 @@ is served through the keyless lane using the OpenCode `public` credential, over
 your configured proxies or WARP.
 
 `nullx` defaults to `model: "auto"`. On startup it calls `/v1/models` and picks
-the first advertised model from its preferred free list, then any free model
-that supports tool calls. Use `nullx doctor` to verify the whole path and
+a free model **that can call tools**, because the agent loop needs one. The
+preferred order (`deepseek-v4.1-flash-free`, `glm-5.3-flash-free`, and the rest)
+only breaks the tie between models that qualify; a model the gateway adds
+later is still picked. Use `nullx doctor` to verify the whole path and
 `nullx models -free` to see the candidates.
+
+## The free lane, end to end
+
+The free lane is the whole point of the setup, so it is worth knowing what it
+takes. Six things have to line up:
+
+| Part | What it does | When it breaks |
+| --- | --- | --- |
+| `anonymous: true` | lets the gateway serve free models without a key | the config lost the flag |
+| `models.free_only` | hides paid models so nothing drifts onto a bill | not the cause of a free-tier failure |
+| WARP exits | every request leaves from a different address | UDP 2408 is blocked, or no exit registered |
+| the CA bundle | the gateway can verify the Cloudflare certificate | `x509: certificate signed by unknown authority` |
+| the model catalog | the gateway knows which models exist | the catalog is pending or empty |
+| tool calls | the gateway restores the tool names your client declared | an old gateway release |
+
+The last one is the subtle one. On the free lane the gateway rewrites every
+tool name your client sends into an opaque `clint_<digest>` name, appends the
+official OpenCode tool set, and maps the names back on the way out. That
+mapping was added in gateway **v1.4.7**; on an older release the model answers
+with the official names (`shell`, `webfetch`, `question`, …) that your client
+never declared, and the agent stops making progress. The installer ships
+v1.4.7, and `opencode-proxy update` upgrades an older one.
+
+Check the lane at any time:
+
+```bash
+opencode-proxy bypass check     # every part of the free lane, one screen
+opencode-proxy bypass enable     # anonymous access, WARP and free models only
+opencode-proxy bypass fix        # certificates, DNS, restart, check again
+nullx doctor                     # the same from the agent side
+```
+
+`opencode-proxy bypass check` names the exact part that is broken: no WARP
+exit, no healthy proxy, an empty or pending catalog, a missing CA bundle, or
+an address the upstream blocked. The agent also recognises the two upstream
+messages that mean "the free lane is blocked for now" and says so instead of
+showing a bare error.
 
 opencode2api also exposes two rotation aliases that walk a group of models and
 fail over on quota, rate limit, or upstream failure:
@@ -166,8 +208,9 @@ rotation, set `"model": "sota"` and configure a Go key in the gateway.
 | Command | Purpose |
 | --- | --- |
 | `nullx` | Interactive shell (REPL). |
+| `nullx --resume` | Continue the most recent session. |
 | `nullx run "prompt"` | One prompt, one answer, exit. |
-| `nullx models [-free]` | List gateway model IDs, context windows, and free markers. |
+| `nullx models [-free]` | List gateway model IDs, context windows, tool support, and free markers. |
 | `nullx doctor` | Check the gateway, credentials, and free-model availability. |
 | `nullx init [-force]` | Write the default config. |
 | `nullx config` | Print the config path and masked values. |
@@ -229,20 +272,22 @@ self-documenting tool pattern.
 | --- | --- |
 | `read` | Read a file with line numbers. Supports `offset` and `limit`. |
 | `write` | Create or overwrite a file, creating parent directories. |
-| `edit` | Replace the first exact occurrence of `old` with `new`. |
+| `edit` | Replace the first exact occurrence of `old` with `new`. Accepts the official `filePath`/`oldString`/`newString`/`replaceAll` names too. |
 | `ls` | List a directory. |
 | `bash` | Run a shell command with a timeout; returns combined output. |
 | `glob` | Find files with `*`, `?`, and `**` segments. |
 | `grep` | Regex content search with an optional include glob. |
 
-Official OpenCode tool names are aliased at execution time (`shell` / `bash` →
-`bash`, `view` → `read`, `patch` → `edit`, `find` → `glob`, `search` → `grep`),
-and the edit tool accepts both `path`/`old`/`new` and the official
+Official OpenCode tool names are aliased at execution time (`shell` / `execute` /
+`bash` → `bash`, `view` → `read`, `patch` → `edit`, `find` → `glob`, `search` →
+`grep`), and the edit tool accepts both `path`/`old`/`new` and the official
 `filePath`/`oldString`/`newString`/`replaceAll` fields. This matters on the
 anonymous lane: the gateway shapes the request into an official CLI session and
 appends the official tool set, so the model may answer with an official name.
 `patch` currently expects `path`/`old`/`new`; a `patchText`-only call returns an
-instructional error and the model can retry with `edit` or `write`.
+instructional error and the model can retry with `edit` or `write`. A call to a
+tool the agent does not have returns a short note naming the tools it does
+have, instead of an error that leaves the model guessing.
 
 Safety bounds: reads cap at 1 MiB, grep files at 2 MiB, command output at
 64 KiB, glob results at 1000, and grep matches at 500. `bash` defaults to a
@@ -260,26 +305,36 @@ not inside it.
 Run `nullx doctor`. It prints:
 
 - whether `/healthz` answers and what `status`/`ready` say;
-- how many Zen, Go, and anonymous credentials the gateway reports;
-- the total and free model count from `/v1/models`;
-- the model `auto` would select.
+- the gateway version, and how many Zen, Go, and anonymous credentials it has;
+- the WARP state and the live exit count;
+- the total, free, and tool-capable model counts from `/v1/models`;
+- the model `auto` would select;
+- a live completion against that model.
 
-If `models: N total, 0 free`, the gateway is not advertising a free model. Check
-that `anonymous: true` is set, that the model catalog has refreshed, and that
-`models.free_only` is not hiding everything. If health reports
-`no_healthy_proxies`, fix the proxy list (or enable WARP); the keyless lane needs
-a route to the upstream.
+The same run names the blocker and the command that clears it:
+
+| What it says | What to do |
+| --- | --- |
+| `warp_unavailable` | UDP 2408 is blocked; run `opencode-proxy fix-certs` then `opencode-proxy restart` |
+| `no_healthy_proxies` | run `opencode-proxy fix-dns`, then `opencode-proxy restart` |
+| `model_catalog_pending` | wait a moment; the catalog loads in the background |
+| `model_catalog_empty` | the gateway cannot reach the upstream; check the connection |
+| `no free models advertised` | `anonymous` is off, or the catalog has not loaded |
+| `no free model advertises tool calls` | the agent cannot run tools; pick another model with `nullx models -free` |
+| `x509: certificate signed by unknown authority` | run `opencode-proxy fix-certs` |
 
 If a request fails with a model error, `nullx` refreshes the catalog and retries
-once with the preferred free model automatically.
+once with the preferred free model automatically. If the model refuses the
+reasoning level, the agent drops the level and asks again on its own.
 
 ## Sessions
 
 Conversations are written to `<data-dir>/sessions/<id>.json` after every
 message and tool result, atomically (temp file + rename). `nullx sessions`
-lists them. This is deliberately simpler than Crush's SQLite layer; the model
-is the same message stream, so a SQLite backend can replace the store later
-without touching the agent loop.
+lists them, and `nullx --resume` continues the most recent one. This is
+deliberately simpler than Crush's SQLite layer; the model is the same message
+stream, so a SQLite backend can replace the store later without touching the
+agent loop.
 
 ## Design map (Crush → nullx)
 

@@ -18,10 +18,12 @@ model end to end.
 
 ```bash
 nullx                     # interactive shell
+nullx --resume            # continue the last session
 nullx "fix the tests"     # one-shot prompt
 nullx models -free        # free models the gateway exposes
 nullx doctor              # gateway + free-model check
 opencode-proxy status     # gateway control
+opencode-proxy bypass     # check the free lane end to end
 ```
 
 From a clone:
@@ -78,14 +80,15 @@ break, and what else the proxy is good for.
 
 | | |
 |---|---|
-| Gateway | `opencode2api` v1.4.6 on `http://127.0.0.1:8080/v1` |
+| Gateway | `opencode2api` v1.4.7 on `http://127.0.0.1:8080/v1` |
 | Dashboard | `http://127.0.0.1:8081` |
 | Egress | Cloudflare WARP IPv6, rotates on every 429/403 |
 | CLI | OpenCode CLI 1.19.5, wired to the proxy for you |
 | Commands | `opencode-unlimited` (menu) and `opencode-proxy` (scriptable) |
 
-Requirements: an ARM64 Android device, Termux or a distro under `proot-distro`,
-and about 300 MB of free space.
+Requirements: an ARM64 or x86_64 device, Termux or a distro under `proot-distro`,
+and about 300 MB of free space. The installer picks the build that fits your
+machine.
 
 ---
 
@@ -123,14 +126,19 @@ Both are detected automatically.
 nullx doctor
 nullx models -free
 opencode-proxy status
+opencode-proxy bypass
 ```
 
-Every line in the doctor output is either `ok` or `FAIL`. Start the gateway
-if it is not running yet:
+Every line in the doctor output is either `ok` or `xx`, and a failing line
+names the command that fixes it. Start the gateway if it is not running yet:
 
 ```bash
 opencode-proxy start
 ```
+
+`opencode-proxy bypass` checks the free lane itself: anonymous access, the
+WARP exits, the model catalog, and the certificates. It is the one command to
+run when the agent answers slowly, stops, or says the model is not available.
 
 ---
 
@@ -156,11 +164,12 @@ Everything is colour coded, no frames and no boxes:
 | `status` | Gateway, WARP state, exposed models |
 | `test [model]` | One test request through the gateway |
 | `bench [model]` | Time to the first token |
-| `models list` / `models best` | The free models |
+| `models list` / `models best` | The free models, live from the gateway |
 | `model <model-id>` | Change the default model |
 | `thinking <mode>` | Reasoning effort: `low` `medium` `high` `max` `none` |
 | `thinking status` | Show the current effort |
 | `doctor` | Check the whole install |
+| `bypass status\|check\|enable\|disable\|fix` | Check and repair the free lane |
 | `repair` | Rewrite the commands and the config, put them back on PATH |
 | `fix-dns` | Point `/etc/resolv.conf` at 1.1.1.1 and 8.8.8.8 |
 | `fix-certs` | Install the CA bundle the gateway needs to verify Cloudflare |
@@ -186,6 +195,8 @@ Then work down the table:
 
 | Symptom | Do this |
 |---------|---------|
+| The agent answers, but never runs a tool | The gateway is too old for the free lane. `opencode-proxy update` brings it to v1.4.7, then `opencode-proxy restart`. |
+| The model is called but does not come back | `opencode-proxy bypass check`. It names the part that is broken: no WARP exit, no proxy, an empty catalog, or a missing CA bundle. |
 | `opencode-unlimited: command not found` | `export PATH="$HOME/.local/bin:$PATH"`, then `opencode-proxy repair`. The commands are also copied into `/usr/local/bin` (or `$PREFIX/bin` on Termux), so a new terminal usually fixes it. |
 | `git: command not found` | `apt-get install -y git`. Only needed to clone or update, the proxy does not need it. |
 | `bash: install.sh: No such file or directory` | You are not in the cloned folder. Run `ls`, then `cd nullxOpenS`. Or skip the clone and use the one command install. |
@@ -247,6 +258,11 @@ What that buys you:
 
 ## Models
 
+The gateway discovers the catalog on its own, so this list is a snapshot, not a
+promise. `opencode-proxy models list` shows what is live right now, with the
+context window and whether the model can call tools. `nullx models -free` shows
+the same from the agent side and picks the one it would use.
+
 | Model | Good for | Context |
 |-------|----------|---------|
 | `deepseek-v4.1-flash-free` | Code, algorithms, refactoring | 128K |
@@ -260,8 +276,8 @@ What that buys you:
 | `flint-40b-free` | Open weight models | 128K |
 | `mimo-v2.6-flash-free` | Small, quick assistant | 128K |
 
-The gateway refreshes this list on its own, `opencode-proxy models list`
-shows what is live right now.
+The agent prefers a free model **that can call tools**, because the whole loop
+runs on them. A model the gateway adds later is picked up automatically.
 
 ---
 

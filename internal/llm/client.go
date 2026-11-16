@@ -241,23 +241,47 @@ type ModelInfo struct {
 	ContextWindow int        `json:"context_window"`
 	ToolCall      bool       `json:"tool_call"`
 	Cost          *ModelCost `json:"cost"`
+	Reasoning     bool       `json:"reasoning"`
 	Metadata      struct {
-		Cost *ModelCost `json:"cost"`
+		ContextWindow int        `json:"context_window"`
+		ToolCall      bool       `json:"tool_call"`
+		Reasoning     bool       `json:"reasoning"`
+		Cost          *ModelCost `json:"cost"`
 	} `json:"metadata"`
 }
 
-// preferredFreeModels is the free-tier order recommended by the OpenCode
-// UNLIMITED installer, best first. A model the gateway adds later is still
-// selected when none of these are advertised.
+// Context returns the context window the gateway advertises. Newer gateways
+// state it in the entry metadata, older ones at the top level.
+func (m ModelInfo) Context() int {
+	if m.ContextWindow > 0 {
+		return m.ContextWindow
+	}
+	return m.Metadata.ContextWindow
+}
+
+// SupportsTools reports whether the model can call tools. The gateway states
+// this in the entry metadata; older builds put it at the top level.
+func (m ModelInfo) SupportsTools() bool {
+	return m.ToolCall || m.Metadata.ToolCall
+}
+
+// HasReasoning reports whether the model answers with a reasoning block.
+func (m ModelInfo) HasReasoning() bool {
+	return m.Reasoning || m.Metadata.Reasoning
+}
+
+// preferredFreeModels is the free-tier order the agent likes best. It is only
+// a preference: the gateway discovers the live catalog on its own, and a model
+// this list does not mention is still picked when the gateway offers it.
 var preferredFreeModels = []string{
 	"deepseek-v4.1-flash-free",
-	"crouton-alpha-free",
+	"glm-5.3-flash-free",
 	"nemotron-3.5-super-vl-free",
+	"crouton-alpha-free",
 	"beam-free",
 	"pulse-alpha-free",
 	"big-pickle",
 	"nemotron-3.5-lightning-free",
-	"glm-5.3-flash-free",
 	"flint-40b-free",
 	"mimo-v2.6-flash-free",
 }
@@ -279,9 +303,10 @@ func (m ModelInfo) IsFree() bool {
 }
 
 // ResolveModel picks the model to use. A concrete preferred ID that exists in
-// the catalog wins; otherwise the recommended free model order is tried, then
-// any free model that supports tool calls, then any free model, and finally the
-// first listed model. It reports false when the catalog is empty.
+// the catalog wins; otherwise a free model that can call tools is preferred,
+// since the agent loop needs one, and the recommended free model order breaks
+// the tie. A free model without tools, then any model at all, is the last
+// resort. It reports false when the catalog is empty.
 func ResolveModel(models []ModelInfo, preferred string) (ModelInfo, bool) {
 	preferred = strings.TrimSpace(preferred)
 	if preferred != "" && preferred != "auto" {
@@ -293,14 +318,21 @@ func ResolveModel(models []ModelInfo, preferred string) (ModelInfo, bool) {
 	}
 	for _, id := range preferredFreeModels {
 		for _, model := range models {
-			if model.ID == id && model.IsFree() {
+			if model.ID == id && model.IsFree() && model.SupportsTools() {
 				return model, true
 			}
 		}
 	}
 	for _, model := range models {
-		if model.IsFree() && model.ToolCall {
+		if model.IsFree() && model.SupportsTools() {
 			return model, true
+		}
+	}
+	for _, id := range preferredFreeModels {
+		for _, model := range models {
+			if model.ID == id && model.IsFree() {
+				return model, true
+			}
 		}
 	}
 	for _, model := range models {
@@ -348,25 +380,75 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 	return nil, fmt.Errorf("unrecognized model list response")
 }
 
+// Health is the gateway readiness document from /healthz.
+type Health struct {
+	Status  string `json:"status"`
+	Ready   bool   `json:"ready"`
+	Version string `json:"version"`
+	Models  struct {
+		Status  string `json:"status"`
+		Total   int    `json:"total"`
+		Exposed int    `json:"exposed"`
+		Zen     int    `json:"zen"`
+		Go      int    `json:"go"`
+		Stale   bool   `json:"stale"`
+	} `json:"models"`
+	Keys struct {
+		Zen       int  `json:"zen"`
+		Go        int  `json:"go"`
+		Total     int  `json:"total"`
+		Anonymous bool `json:"anonymous"`
+	} `json:"keys"`
+	Proxies struct {
+		Total     int `json:"total"`
+		Healthy   int `json:"healthy"`
+		Unhealthy int `json:"unhealthy"`
+	} `json:"proxies"`
+	Warp *struct {
+		Status  string `json:"status"`
+		Stack   string `json:"stack"`
+		Size    int    `json:"size"`
+		Active  int    `json:"active"`
+		Standby int    `json:"standby"`
+		Cooling int    `json:"cooling"`
+	} `json:"warp"`
+	Issues []string `json:"issues"`
+}
+
+// Blocking reports the issues that keep the gateway from serving, in the order
+// they should be fixed. A gateway that is only degraded still answers, so it
+// is not listed as blocking.
+func (h Health) Blocking() []string {
+	var blocking []string
+	for _, issue := range h.Issues {
+		switch issue {
+		case "model_catalog_pending", "model_catalog_empty", "warp_unavailable", "no_healthy_proxies":
+			blocking = append(blocking, issue)
+		}
+	}
+	return blocking
+}
+
 // Health fetches the gateway readiness document from /healthz. The API base URL
 // is expected to end in /v1; the suffix is stripped because health answers at
-// the server root.
-func (c *Client) Health(ctx context.Context) (map[string]any, error) {
+// the server root. A gateway that answers with a 503 still returns its
+// document, so the caller can name the reason.
+func (c *Client) Health(ctx context.Context) (Health, error) {
 	base := strings.TrimRight(c.BaseURL, "/")
 	base = strings.TrimSuffix(base, "/v1")
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/healthz", nil)
 	if err != nil {
-		return nil, err
+		return Health{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, err
+		return Health{}, err
 	}
 	defer resp.Body.Close()
-	var document map[string]any
+	var document Health
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&document); err != nil {
-		return nil, err
+		return Health{}, err
 	}
 	if resp.StatusCode/100 != 2 {
 		return document, fmt.Errorf("health answered %s", resp.Status)

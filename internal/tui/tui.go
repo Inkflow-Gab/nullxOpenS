@@ -103,7 +103,7 @@ type editorDoneMsg struct {
 }
 
 type healthMsg struct {
-	document map[string]any
+	document llm.Health
 	err      error
 }
 
@@ -506,21 +506,21 @@ func (m *Model) applyHealth(message healthMsg) {
 		m.healthText = "gateway down"
 		return
 	}
-	status := asString(message.document["status"])
+	document := message.document
+	status := document.Status
 	if status == "" {
 		status = "?"
 	}
-	ready, _ := message.document["ready"].(bool)
-	m.healthOK = ready || status == "ok" || status == "ready"
+	// A degraded gateway still answers, so it is not shown as down. Only a
+	// gateway that refuses to serve counts as down.
+	m.healthOK = document.Ready || status == "ok" || status == "ready" || status == "degraded" || status == "starting"
 
-	if models, ok := message.document["models"].(map[string]any); ok {
-		m.freeModels = asInt(models["exposed"])
-		m.totalModels = asInt(models["total"])
-	}
-	if warp, ok := message.document["warp"].(map[string]any); ok {
-		m.warpText = "warp " + asString(warp["status"])
-		if active := asInt(warp["active"]); active > 0 {
-			m.warpText += fmt.Sprintf(" %d", active)
+	m.freeModels = document.Models.Exposed
+	m.totalModels = document.Models.Total
+	if document.Warp != nil {
+		m.warpText = "warp " + document.Warp.Status
+		if document.Warp.Active > 0 {
+			m.warpText += fmt.Sprintf(" %d", document.Warp.Active)
 		}
 	}
 	m.healthText = fmt.Sprintf("%s · %d free/%d", status, m.freeModels, m.totalModels)
@@ -961,21 +961,4 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func asString(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func asInt(value any) int {
-	switch number := value.(type) {
-	case float64:
-		return int(number)
-	case int:
-		return number
-	case int64:
-		return int(number)
-	}
-	return 0
 }

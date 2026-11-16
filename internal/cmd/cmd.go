@@ -277,9 +277,22 @@ func listModels(args []string) error {
 		if model.IsFree() {
 			marker = "[free]"
 		}
-		if model.ContextWindow > 0 {
-			fmt.Printf("%s %-44s context=%d\n", marker, model.ID, model.ContextWindow)
-		} else {
+		flags := ""
+		if model.SupportsTools() {
+			flags += " tools"
+		}
+		if model.HasReasoning() {
+			flags += " reasoning"
+		}
+		context := model.Context()
+		switch {
+		case context > 0 && flags != "":
+			fmt.Printf("%s %-44s context=%d %s\n", marker, model.ID, context, flags)
+		case context > 0:
+			fmt.Printf("%s %-44s context=%d\n", marker, model.ID, context)
+		case flags != "":
+			fmt.Printf("%s %-44s %s\n", marker, model.ID, flags)
+		default:
 			fmt.Printf("%s %s\n", marker, model.ID)
 		}
 		shown++
@@ -338,14 +351,23 @@ func doctor(args []string) error {
 	if healthErr != nil {
 		fmt.Printf("health: FAIL (%v)\n", healthErr)
 	} else {
-		status, _ := health["status"].(string)
-		ready, _ := health["ready"].(bool)
-		fmt.Printf("health: %s (ready=%v)\n", status, ready)
-		if keys, ok := health["keys"].(map[string]any); ok {
-			fmt.Printf("keys: zen=%v go=%v anonymous=%v\n", keys["zen"], keys["go"], keys["anonymous"])
+		fmt.Printf("health: %s (ready=%v)\n", health.Status, health.Ready)
+		if health.Version != "" {
+			fmt.Printf("gateway version: %s\n", health.Version)
 		}
-		if issues, ok := health["issues"].([]any); ok && len(issues) > 0 {
-			fmt.Printf("issues: %v\n", issues)
+		fmt.Printf("keys: zen=%d go=%d anonymous=%v\n", health.Keys.Zen, health.Keys.Go, health.Keys.Anonymous)
+		if health.Warp != nil {
+			fmt.Printf("warp: %s (stack %s, active %d, standby %d)\n",
+				health.Warp.Status, health.Warp.Stack, health.Warp.Active, health.Warp.Standby)
+		}
+		if health.Proxies.Total > 0 {
+			fmt.Printf("proxies: %d healthy of %d\n", health.Proxies.Healthy, health.Proxies.Total)
+		}
+		if len(health.Issues) > 0 {
+			fmt.Printf("issues: %s\n", strings.Join(health.Issues, ", "))
+		}
+		for _, issue := range health.Blocking() {
+			fmt.Printf("blocked by %s: %s\n", issue, fixFor(issue))
 		}
 	}
 
@@ -355,19 +377,26 @@ func doctor(args []string) error {
 		return fmt.Errorf("cannot list models: %w", modelErr)
 	}
 	free := 0
+	usable := 0
 	for _, model := range models {
 		if model.IsFree() {
 			free++
+			if model.SupportsTools() {
+				usable++
+			}
 		}
 	}
-	fmt.Printf("models: %d total, %d free\n", len(models), free)
+	fmt.Printf("models: %d total, %d free, %d free with tools\n", len(models), free, usable)
 	chosen, ok := llm.ResolveModel(models, cfg.Model)
 	if !ok {
 		return fmt.Errorf("no models available")
 	}
-	fmt.Printf("selected model: %s (free=%v)\n", chosen.ID, chosen.IsFree())
+	fmt.Printf("selected model: %s (free=%v tools=%v)\n", chosen.ID, chosen.IsFree(), chosen.SupportsTools())
 	if free == 0 {
 		return fmt.Errorf("no free models advertised; enable anonymous or add free-model keys in the gateway config")
+	}
+	if usable == 0 {
+		fmt.Println("note: no free model advertises tool calls, so the agent cannot run tools")
 	}
 	if probe {
 		probeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
@@ -386,6 +415,21 @@ func doctor(args []string) error {
 		fmt.Printf("inference: OK (%s)\n", time.Since(start).Round(time.Millisecond))
 	}
 	return nil
+}
+
+// fixFor names the command that clears one gateway issue.
+func fixFor(issue string) string {
+	switch issue {
+	case "warp_unavailable":
+		return "the WARP tunnel has no exit: check that UDP port 2408 is open, then run opencode-proxy fix-certs and opencode-proxy restart"
+	case "no_healthy_proxies":
+		return "no proxy is usable: run opencode-proxy fix-dns and opencode-proxy restart"
+	case "model_catalog_pending":
+		return "the model catalog is still loading: wait a moment, then run nullx doctor again"
+	case "model_catalog_empty":
+		return "the gateway advertised no models: check the upstream connection, then run opencode-proxy restart"
+	}
+	return "run nullx doctor again after opencode-proxy restart"
 }
 
 func keyStatus(key string) string {

@@ -82,7 +82,7 @@ OPENCODE_UNLIMITED = LOCAL_BIN / "opencode-unlimited"
 OPENCODE_JSONC = CONFIG_DIR / "opencode.jsonc"
 BASHRC = HOME / ".bashrc"
 
-ENGINE_VER = "v1.4.6"
+ENGINE_VER = "v1.4.7"
 ENGINE_URL = (
     "https://github.com/jasonxu114514/opencode2api/releases/download/"
     f"{ENGINE_VER}/opencode2api_{ENGINE_VER}_linux_arm64.tar.gz"
@@ -127,26 +127,29 @@ GATEWAY_CONFIG = {
     },
     "retry": {
         "max_attempts": 6,
-        "timeout_seconds": 180,
+        "timeout_seconds": 300,
     },
     "models": {
         "refresh_seconds": 300,
         "protocols": {},
         "free_only": True,
+        "active_probes": True,
     },
     "performance": {
-        "max_idle_conns": 256,
-        "max_idle_conns_per_host": 64,
+        "max_idle_conns": 512,
+        "max_idle_conns_per_host": 128,
         "max_conns_per_host": 0,
-        "idle_conn_timeout_seconds": 60,
+        "idle_conn_timeout_seconds": 120,
         "connect_timeout_seconds": 10,
         "failure_cooldown_seconds": 15,
         "attempt_timeout_seconds": 0,
         "first_event_timeout_seconds": 0,
+        "max_anonymous_exits": 8,
+        "free_tier_block_seconds": 900,
     },
     "logging": {
         "level": "info",
-        "ring_size": 1000,
+        "ring_size": 2000,
         "dump_request_bodies": False,
     },
     "webui": {
@@ -155,6 +158,27 @@ GATEWAY_CONFIG = {
         "username": "admin",
         "password": "changeme-changeme",
         "session_ttl_minutes": 720,
+    },
+    "reasoning": {
+        "effort": "medium",
+        "effort_by_model": {},
+    },
+    "rotation": {
+        "sota": {
+            "alias": "sota",
+            "order": [
+                "deepseek-v4.1-flash",
+                "glm-5.3",
+                "grok-4.6",
+                "kimi-k3",
+                "qwen3.8-max",
+            ],
+        },
+        "sweet": {
+            "alias": "sweet",
+            "order": [],
+        },
+        "first_output_seconds": 30,
     },
 }
 
@@ -541,8 +565,89 @@ def opencode_config(system_prompt=""):
 
 
 def write_config():
+    """Write the gateway config.
+
+    Values the user changed are kept, new settings of a newer gateway are
+    added, so an upgrade never drops a key someone added by hand.
+    """
     BASE_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(GATEWAY_CONFIG, indent=2))
+    config = json.loads(json.dumps(GATEWAY_CONFIG))
+
+    if CONFIG_FILE.exists():
+        try:
+            current = json.loads(CONFIG_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            current = {}
+        if isinstance(current, dict):
+            for key, value in current.items():
+                if isinstance(value, dict) and isinstance(config.get(key), dict):
+                    merged = dict(config[key])
+                    merged.update(value)
+                    config[key] = merged
+                else:
+                    config[key] = value
+
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    return config
+
+
+def gateway_config():
+    """The gateway config as it is on disk, empty when there is none."""
+    if not CONFIG_FILE.exists():
+        return {}
+    try:
+        data = json.loads(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_gateway_setting(path, value):
+    """Set one setting in the gateway config, path is a list of keys."""
+    config = gateway_config()
+    node = config
+    for key in path[:-1]:
+        node = node.setdefault(key, {})
+        if not isinstance(node, dict):
+            return False
+    node[path[-1]] = value
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+    return True
+
+
+def gateway_models():
+    """The live model list from the gateway, empty when it is unreachable."""
+    req = urllib.request.Request(
+        f"{API_URL}/v1/models",
+        headers={"Authorization": f"Bearer {API_KEY}", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = json.loads(resp.read().decode())
+    except Exception:
+        return []
+
+    entries = payload.get("data", []) if isinstance(payload, dict) else payload
+    models = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id") or entry.get("name")
+        if not model_id:
+            continue
+        metadata = entry.get("metadata") if isinstance(entry.get("metadata"), dict) else {}
+        cost = entry.get("cost") if isinstance(entry.get("cost"), dict) else metadata.get("cost")
+        free = "free" in model_id.lower()
+        if isinstance(cost, dict) and cost.get("input") == 0 and cost.get("output") == 0:
+            free = True
+        models.append({
+            "id": model_id,
+            "free": free,
+            "ctx": entry.get("context_window") or 0,
+            "tools": bool(entry.get("tool_call")),
+            "owner": entry.get("owned_by", ""),
+        })
+    return models
 
 
 def write_opencode_config(force=False):
@@ -1088,33 +1193,60 @@ def do_rate_limit():
     info("restart the proxy: opencode-proxy restart")
 
 
+def nullx_config_path():
+    """Where the nullx agent keeps its configuration."""
+    base = os.environ.get("XDG_CONFIG_HOME") or str(HOME / ".config")
+    return Path(base) / "nullx" / "config.json"
+
+
 def do_models(subcmd="list"):
-    """Show the free models the gateway exposes."""
+    """List the models the gateway offers right now."""
     if subcmd not in ("list", "best"):
         err(f"unknown models subcommand: {subcmd}")
         info("usage: opencode-proxy models {list|best}")
         return
 
-    section("free models")
-    try:
-        data = json.loads(urllib.request.urlopen(API_URL + "/healthz", timeout=5).read().decode())
-        models = data.get("models", {})
-        info(f"upstream models: {models.get('total', 0)}, free ones exposed: {models.get('exposed', 0)}")
-    except Exception:
+    section("models")
+    live = gateway_models()
+
+    if not live:
         warn("the gateway is not reachable, showing the known models")
         info("start it with: opencode-proxy start")
+        if subcmd == "best":
+            for rank, (name, meta) in enumerate(sorted(MODEL_INFO.items(), key=lambda kv: kv[1]["rank"]), 1):
+                if rank > 3:
+                    break
+                print(f"  {GREEN}{rank}{NC}  {name}  {DIM}{meta['ctx']} - {meta['use']}{NC}")
+            return
+        print()
+        print(f"  {DIM}{'model':<35} {'context':<9} best for{NC}")
+        for name, meta in sorted(MODEL_INFO.items(), key=lambda kv: kv[1]["rank"]):
+            print(f"  {GREEN}{name:<35}{NC} {BLUE}{meta['ctx']:<9}{NC} {meta['use']}")
+        print()
+        return
+
+    free = [m for m in live if m["free"]]
+    paid = [m for m in live if not m["free"]]
+    info(f"{len(live)} models advertised, {len(free)} free")
 
     if subcmd == "best":
-        for rank, (name, meta) in enumerate(sorted(MODEL_INFO.items(), key=lambda kv: kv[1]["rank"]), 1):
-            if rank > 3:
-                break
-            print(f"  {rank}. {name}  {DIM}{meta['ctx']} - {meta['use']}{NC}")
+        usable = [m for m in free if m["tools"]] or free
+        for rank, model in enumerate(usable[:3], 1):
+            tools = " tools" if model["tools"] else ""
+            print(f"  {GREEN}{rank}{NC}  {model['id']}  {DIM}{model['ctx'] or '?'}{tools}{NC}")
+        print()
+        info("switch the default model: opencode-proxy model <model-id>")
         return
 
     print()
-    print(f"  {DIM}{'model':<35} {'context':<9} best for{NC}")
-    for name, meta in sorted(MODEL_INFO.items(), key=lambda kv: kv[1]["rank"]):
-        print(f"  {GREEN}{name:<35}{NC} {BLUE}{meta['ctx']:<9}{NC} {meta['use']}")
+    print(f"  {DIM}{'model':<35} {'context':<9} free{NC}")
+    for model in sorted(free, key=lambda m: (not m["tools"], m["id"])):
+        mark = f"{GREEN}yes{NC}" if model["free"] else "no"
+        ctx = model["ctx"] if model["ctx"] else "?"
+        print(f"  {GREEN}{model['id']:<35}{NC} {BLUE}{str(ctx):<9}{NC} {mark}")
+    if paid and not gateway_config().get("models", {}).get("free_only", True):
+        for model in sorted(paid, key=lambda m: m["id"]):
+            print(f"  {DIM}{model['id']:<35}{NC} {DIM}{str(model['ctx'] or '?'):<9}{NC} no")
     print()
     info("switch the default model: opencode-proxy model <model-id>")
 
@@ -1136,6 +1268,17 @@ def do_model(name=""):
 
     config["model"] = f"{PROVIDER}/{name}"
     OPENCODE_JSONC.write_text(json.dumps(config, indent=2))
+
+    # Keep the nullx agent on the same model.
+    nullx = nullx_config_path()
+    if nullx.exists():
+        try:
+            agent = json.loads(nullx.read_text())
+        except (OSError, json.JSONDecodeError):
+            agent = {}
+        agent["model"] = name
+        nullx.write_text(json.dumps(agent, indent=2))
+
     ok(f"default model is now {name}")
     info("restart OpenCode to apply: opencode-unlimited restart")
 

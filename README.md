@@ -140,6 +140,33 @@ opencode-proxy start
 WARP exits, the model catalog, and the certificates. It is the one command to
 run when the agent answers slowly, stops, or says the model is not available.
 
+### When the free tier walls every exit
+
+The free allowance is counted against the public address a request leaves
+from, and Cloudflare treats a whole IPv6 `/64` as one allowance. A fresh exit
+normally clears a block by itself. When two *different* `/64`s are refused in a
+row, a new address is no longer the fix, and rotating further only spends the
+exits and cuts live streams. The controller records that and stops pretending:
+
+```bash
+opencode-proxy wall          # what the free tier did, and when it resets
+opencode-proxy rotation      # the persisted state: scopes, blocks, failures
+opencode-proxy rotation reset # forget the history, keep reading the log here
+opencode-proxy egress        # the public address and its real /64
+```
+
+The state lives in `~/.opencode-proxy/rotation.json`, and the gateway log is
+read from a saved offset, so a wall is folded once even if the log is long.
+`nullx doctor` and the TUI `/status` report the same state; the status line
+shows `* free wall` while rotation is paused. A wall clears on its own at
+00:00 UTC, or as soon as a request is accepted from a fresh scope.
+
+`opencode-proxy egress` is the honest address check: it prints the public
+address, folds it to the quota scope, and says whether that scope actually
+changed since the last check. Reconnecting WARP inside the same `/64` produces
+a new `/128` and the same exhausted allowance, which is why the scope, not the
+address, is what gets compared.
+
 ---
 
 ## The look
@@ -205,6 +232,9 @@ Then work down the table:
 | `x509: certificate signed by unknown authority` in the log | The container has no CA bundle, so the gateway cannot verify Cloudflare. `opencode-proxy fix-certs` installs `ca-certificates`, then `opencode-proxy restart`. Inside proot-distro the same thing by hand: `apt-get update && apt-get install -y ca-certificates`. |
 | `failed to verify certificate` right after a fresh install | Run `opencode-proxy fix-certs` once, then `opencode-proxy restart`. The doctor names the exact cause: `opencode-proxy doctor` reads the log and tells you which fix applies. |
 | Still `Free usage exceeded` | OpenCode is bypassing the proxy. `opencode-proxy doctor` must show `opencode.jsonc routes through the proxy` as `ok`. |
+| `Free usage exceeded` on every retry, even after a restart | `opencode-proxy wall`. Two different `/64`s were refused, so only the daily reset clears it; the command prints the time. |
+| Rotation seems to "work" but the limit returns | `opencode-proxy egress`. A reconnect inside the same `/64` keeps the same exhausted allowance; the command says whether the scope changed. |
+| `opencode` cannot reach the gateway on Linux | `opencode-proxy lane status`. Bun ignores the WARP SOCKS listener, so the CLI uses a loopback HTTP CONNECT proxy instead; `lane start` checks it by hand. |
 | The CLI does not start on Termux | `pkg install glibc-repo glibc-runner`, the CLI needs glibc. |
 | The download failed during install | The installer keeps going and tells you the URL. Download it by hand and save it to `~/.opencode-proxy/bin/opencode2api`. |
 | Want a clean slate | `opencode-proxy uninstall` then `python3 setup.py install` |
@@ -288,6 +318,9 @@ runs on them. A model the gateway adds later is picked up automatically.
 | `~/.opencode-proxy/config.json` | Gateway configuration |
 | `~/.opencode-proxy/proxy.log` | Gateway log |
 | `~/.opencode-proxy/proxy.pid` | PID of the running gateway |
+| `~/.opencode-proxy/rotation.json` | Persisted free-tier rotation state |
+| `~/.opencode-proxy/lane_proxy.py` | Loopback HTTP CONNECT proxy the CLI uses |
+| `~/.opencode-proxy/lane.log` | Lane proxy log |
 | `~/.opencode-proxy/backups/` | Backups from `opencode-proxy backup` |
 | `~/.config/opencode/opencode.jsonc` | OpenCode configuration |
 | `~/.local/bin/opencode-proxy` | The gateway command |

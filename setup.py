@@ -7,6 +7,7 @@ inside proot-distro Ubuntu.
 """
 
 import argparse
+import ipaddress
 import json
 import os
 import shutil
@@ -16,6 +17,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 RED = "\033[0;31m"
@@ -73,6 +75,10 @@ CONFIG_DIR = HOME / ".config" / "opencode"
 PID_FILE = BASE_DIR / "proxy.pid"
 LOG_FILE = BASE_DIR / "proxy.log"
 CONFIG_FILE = BASE_DIR / "config.json"
+ROTATION_FILE = BASE_DIR / "rotation.json"
+LANE_PID_FILE = BASE_DIR / "lane.pid"
+LANE_STATE_FILE = BASE_DIR / "lane.json"
+LANE_LOG_FILE = BASE_DIR / "lane.log"
 BACKUP_DIR = BASE_DIR / "backups"
 MANAGER_FILE = LOCAL_BIN / "opencode-proxy"
 ENGINE_BIN = BIN_DIR / "opencode2api"
@@ -987,13 +993,25 @@ def install_opencode_cli(dry_run=False):
 
 
 def write_opencode_wrapper():
-    """Write ~/.local/bin/opencode, the script that starts the CLI."""
-    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
-    if detect_env() == "termux":
-        launcher = 'exec grun "$HOME/.local/bin/opencode-bin" "$@"'
-    else:
-        launcher = f'exec "{OPENCODE_BIN}" "$@"'
+    """Write ~/.local/bin/opencode, the script that starts the CLI.
 
+    On Linux the CLI runs through the local lane: Bun ignores the SOCKS
+    variables the WARP client sets, so the wrapper starts a loopback HTTP
+    CONNECT proxy and points HTTPS_PROXY at it. The proxy is a child of the
+    wrapper, so it disappears with the session.
+    """
+    LOCAL_BIN.mkdir(parents=True, exist_ok=True)
+    lane = Lanes()
+    if detect_env() == "termux":
+        # Termux needs glibc-runner, and the binary lives on the same path.
+        launcher = 'grun "$HOME/.local/bin/opencode-bin" "$@"'
+    else:
+        launcher = f'"{OPENCODE_BIN}" "$@"'
+
+    # Termux has no WARP SOCKS listener to compensate for, and proot already
+    # reaches the gateway directly, so only native Linux gets the lane.
+    lane_hook = lane.wrapper_hook() if detect_env() != "termux" else ""
+    lane_note = 'LANE_NOTE="$(python3 "$HOME/.opencode-proxy/setup.py" lane status --quiet 2>/dev/null | head -1)"\n[ -n "$LANE_NOTE" ] && printf "  ${{DIM}}%s${{NC}}\\n" "$LANE_NOTE"' if lane_hook else ""
     install_script(OPENCODE_WRAPPER, f"""#!/usr/bin/env bash
 # OpenCode CLI wrapper. Passes every argument through to opencode-bin and
 # prints the current thinking mode before handing over.
@@ -1007,9 +1025,242 @@ THINKING_MODE="$(python3 "$HOME/.opencode-proxy/setup.py" thinking status 2>/dev
 echo
 printf "  ${{BOLD}}${{CYAN}}OpenCode UNLIMITED${{NC}}  %s\n" "${{THINKING_MODE:-thinking: off}}"
 printf "  ${{DIM}}api  {API_URL}/v1${{NC}}\n"
+{lane_note}
 echo
+{lane_hook}
 {launcher}
 """, "# OpenCode CLI wrapper")
+
+
+# --- local lane ------------------------------------------------------------
+#
+# OpenCode runs on Bun, and Bun does not route through the SOCKS listener WARP
+# leaves behind. A loopback HTTP CONNECT proxy does work, so the lane is a tiny
+# stdlib proxy that the CLI wrapper starts, points HTTPS_PROXY at, and stops
+# with the session. The gateway keeps its own egress; the lane only exists so
+# the client can reach it over a network OpenCode understands.
+
+LANE_HOST = "127.0.0.1"
+LANE_DEFAULT_PORT = 0
+
+LANE_PROXY_FALLBACK = """#!/usr/bin/env python3
+import sys
+
+sys.stderr.write("lane_proxy.py is missing; run: opencode-proxy repair\\n")
+sys.exit(1)
+"""
+
+
+def lane_sources():
+    """Where the lane proxy can come from, best first.
+
+    A checkout has it in scripts/ next to this file. An installed copy of
+    setup.py lives in ~/.opencode-proxy, where install already placed the
+    proxy itself, so that copy is the source of truth there.
+    """
+    here = Path(__file__).resolve().parent
+    return (here / "scripts" / "lane_proxy.py", BASE_DIR / "lane_proxy.py")
+
+
+def lane_script():
+    """The lane proxy source, or a stub that explains it is missing."""
+    for candidate in lane_sources():
+        try:
+            text = candidate.read_text()
+        except OSError:
+            continue
+        if "def main(" in text:
+            return text
+    # An install that copied only setup.py still gets a script that says what
+    # is wrong instead of a traceback from the wrapper.
+    return LANE_PROXY_FALLBACK
+
+
+def install_lane(dry_run=False):
+    """Put the lane proxy next to setup.py so the wrapper can run it."""
+    if dry_run:
+        info(f"would install the local lane proxy in {BASE_DIR}")
+        return
+    script = Lanes().ensure()
+    ok(f"local lane proxy ready at {script}")
+
+
+class Lanes:
+    """The local lane: a loopback CONNECT proxy for the OpenCode CLI."""
+
+    def __init__(self):
+        self.script = BASE_DIR / "lane_proxy.py"
+        self.port_file = BASE_DIR / "lane.port"
+        self.log_file = LANE_LOG_FILE
+
+    def ensure(self):
+        """Write the lane proxy next to this script."""
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        source = lane_script()
+        current = self.script.read_text() if self.script.exists() else ""
+        if current != source:
+            self.script.write_text(source)
+            os.chmod(self.script, 0o755)
+        return self.script
+
+    def pid(self):
+        """The running lane process, or None."""
+        if not LANE_PID_FILE.exists():
+            return None
+        try:
+            pid = int(LANE_PID_FILE.read_text().strip())
+        except (OSError, ValueError):
+            return None
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return None
+        return pid
+
+    def port(self):
+        """The port the lane listens on, or 0 when it is not up."""
+        if not self.pid():
+            return 0
+        try:
+            return int(self.port_file.read_text().strip() or 0)
+        except (OSError, ValueError):
+            return 0
+
+    def start(self):
+        """Start the lane and wait for its port, returning it or 0."""
+        port = self.port()
+        if port:
+            return port
+        self.ensure()
+        try:
+            self.port_file.unlink(missing_ok=True)
+        except OSError:
+            pass
+        log_fd = open(self.log_file, "a") if self.log_file else None
+        try:
+            process = subprocess.Popen(
+                [sys.executable, str(self.script), "0", "--port-file", str(self.port_file)],
+                stdout=subprocess.DEVNULL,
+                stderr=log_fd or subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        finally:
+            if log_fd:
+                log_fd.close()
+        LANE_PID_FILE.write_text(str(process.pid))
+        for _ in range(50):
+            try:
+                port = int(self.port_file.read_text().strip() or 0)
+            except (OSError, ValueError):
+                port = 0
+            if port:
+                return port
+            if process.poll() is not None:
+                return 0
+            time.sleep(0.1)
+        return 0
+
+    def stop(self):
+        """Stop the lane process and forget its state."""
+        pid = self.pid()
+        if pid:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
+        for path in (LANE_PID_FILE, self.port_file):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return pid
+
+    def wrapper_hook(self):
+        """The bash block the CLI wrapper uses to start and use the lane."""
+        return """
+# Start the local lane: Bun does not use the WARP SOCKS listener, so the CLI
+# talks to a loopback HTTP CONNECT proxy instead.
+LANE_PID=""
+LANE_PORT=""
+LANE_DIR="$HOME/.opencode-proxy"
+if command -v python3 >/dev/null 2>&1 && [ -d "$LANE_DIR" ]; then
+    python3 "$HOME/.opencode-proxy/setup.py" lane ensure >/dev/null 2>&1
+    LANE_PORT_FILE="$HOME/.opencode-proxy/lane.port"
+    rm -f "$LANE_PORT_FILE"
+    python3 "$HOME/.opencode-proxy/lane_proxy.py" 0 --port-file "$LANE_PORT_FILE" \\
+        >>"$HOME/.opencode-proxy/lane.log" 2>&1 &
+    LANE_PID=$!
+    for _ in $(seq 1 50); do
+        if [ -s "$LANE_PORT_FILE" ]; then
+            LANE_PORT="$(cat "$LANE_PORT_FILE")"
+            break
+        fi
+        sleep 0.1
+    done
+    if [ -n "$LANE_PORT" ]; then
+        export HTTPS_PROXY="http://127.0.0.1:$LANE_PORT"
+        export HTTP_PROXY="http://127.0.0.1:$LANE_PORT"
+        export NO_PROXY="127.0.0.1,localhost"
+        export https_proxy="$HTTPS_PROXY"
+        export http_proxy="$HTTP_PROXY"
+        export no_proxy="$NO_PROXY"
+        trap \'[ -n "$LANE_PID" ] && kill "$LANE_PID" 2>/dev/null; rm -f "$LANE_PORT_FILE"\' EXIT INT TERM
+    fi
+fi
+"""
+
+
+def do_lane(action="status"):
+    """Control the local CONNECT lane that the CLI wrapper uses."""
+    lanes = Lanes()
+    action = (action or "status").lower()
+    quiet = "--quiet" in sys.argv
+    if action in ("ensure",):
+        lanes.ensure()
+        return
+    if action in ("start", "on"):
+        port = lanes.start()
+        if port:
+            if not quiet:
+                section("local lane")
+                ok(f"listening on 127.0.0.1:{port}")
+                info(f"use it with: HTTPS_PROXY=http://127.0.0.1:{port} opencode")
+            else:
+                print(f"lane up        : 127.0.0.1:{port}")
+        else:
+            if not quiet:
+                err("the lane did not start")
+                info(f"check the log: {LANE_LOG_FILE}")
+            else:
+                print("lane           : down")
+        return
+    if action in ("stop", "off"):
+        pid = lanes.stop()
+        if pid:
+            ok(f"lane stopped (pid {pid})")
+        else:
+            info("the lane was not running")
+        return
+    if action in ("status", "check"):
+        lanes.ensure()
+        port = lanes.port()
+        pid = lanes.pid()
+        if quiet:
+            if port:
+                print(f"lane up        : 127.0.0.1:{port}")
+            return
+        section("local lane")
+        info("Bun ignores the WARP SOCKS listener, so the CLI uses this proxy")
+        if port:
+            ok(f"listening on 127.0.0.1:{port}" + (f" (pid {pid})" if pid else ""))
+            info("the CLI wrapper starts it on demand and stops it on exit")
+        else:
+            info("not running")
+            info("the CLI wrapper starts it when opencode runs")
+            info("start it now with: opencode-proxy lane start")
+        return
+    err(f"unknown lane action: {action}")
+    info("usage: opencode-proxy lane {status|start|stop}")
 
 
 # --- daemon ----------------------------------------------------------------
@@ -1182,8 +1433,660 @@ def status_daemon():
             info(f"version   : {version}")
     else:
         warn("gateway is starting or unreachable")
+    wall = wall_state()
+    wall_data = wall.get("wall") or {}
+    if wall_data.get("open"):
+        reset = wall_until_text(wall_data)
+        warn("wall      : rotation paused until the allowance resets")
+        if reset:
+            info(f"resets    : {reset}")
+    elif wall["blocks"]:
+        info(f"wall      : {wall['blocks']} exit(s) refused, rotating")
     info(f"api       : {API_URL}/v1")
     info(f"dashboard : {DASHBOARD_URL}")
+
+
+# The free tier is applied to the public address that leaves the gateway, and
+# Cloudflare counts a whole /64 as one allowance. A block therefore means that
+# /64 is spent, and the next request has to leave from another one.
+WALL_EVENT = "free_tier_ip_blocked"
+WALL_BREAKER = "anonymous_breaker_open"
+SUCCESS_EVENT = "anonymous_attempt_succeeded"
+
+# Transport trouble is not a wall, but it is the other reason a request dies
+# mid-answer. Counting it next to the wall keeps the two apart: a rotating
+# exit and a broken tunnel look identical to the client.
+TRANSPORT_EVENTS = (
+    "anonymous_attempt_transport_failed",
+    "attempt_transport_failed",
+    "stream_failed",
+    "proxy_unavailable",
+    "request_failed",
+    "warp_429_exhausted",
+)
+
+# The gateway logs every attempt, so the same block is reported once per
+# upstream gate. Two blocks of one scope inside this window are one event.
+SAME_BLOCK_SECONDS = 60
+
+# Two different /64s blocked inside this window mean the allowance is not
+# following the address. Rotating further only spends the pool and cuts live
+# streams, so the right move is to wait for the daily reset.
+REWALL_SECONDS = 30 * 60
+FREE_WALL_EXITS = 2
+
+# How long a broken scope stays in the rotation state. Older entries do not
+# change any decision, they only make the file grow.
+SCOPE_RETENTION = 24 * 3600
+MAX_SCOPES = 32
+
+# Only the tail of the log matters: the state machine folds the events it has
+# not seen yet, and the whole file can grow past a terminal session.
+LOG_TAIL_BYTES = 2 * 1024 * 1024
+
+
+def egress_scope(label):
+    """The quota scope of an egress label: a /64 for IPv6, a /32 for IPv4.
+
+    The gateway labels a WARP attempt ``warp:`` plus the masked prefix it
+    counted against, and leaves a proxy attempt as the redacted proxy name. A
+    bare address is masked the same way, because a new /128 inside the old /64
+    is the same exhausted allowance and must not look like a rotation.
+    """
+    label = str(label or "").strip()
+    if not label:
+        return ""
+    prefix, sep, rest = label.partition(":")
+    name = rest if sep and prefix == "warp" else label
+    address = name.partition("/")[0]
+    try:
+        ip = ipaddress.ip_address(address.strip())
+    except ValueError:
+        # A proxy route is identified by its redacted name, which is already
+        # one scope per node.
+        return label
+    # The allowance is always a whole /64 on IPv6 and a whole /32 on IPv4, so
+    # any prefix the label carries is folded to that width.
+    width = 32 if ip.version == 4 else 64
+    try:
+        network = ipaddress.ip_network(f"{ip}/{width}", strict=False)
+    except ValueError:
+        return label
+    scope = f"warp:{network}"
+    return scope
+
+
+def record_time(record):
+    """The time of a log record, or zero when it has none."""
+    stamp = str(record.get("time", "")).strip()
+    if not stamp:
+        return 0.0
+    if stamp.endswith("Z"):
+        stamp = stamp[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(stamp).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def read_log_lines(offset=0):
+    """The complete JSON log lines written after offset.
+
+    Only whole lines are returned, so a line the gateway is still writing is
+    read again next time instead of being dropped or half-parsed.
+    """
+    if not LOG_FILE.exists():
+        return [], 0
+    try:
+        size = LOG_FILE.stat().st_size
+    except OSError:
+        return [], 0
+    if offset < 0 or offset > size:
+        offset = 0
+    if size - offset > LOG_TAIL_BYTES:
+        offset = size - LOG_TAIL_BYTES
+    try:
+        with LOG_FILE.open("rb") as handle:
+            handle.seek(offset)
+            chunk = handle.read()
+    except OSError:
+        return [], offset
+    cut = chunk.rfind(b"\n")
+    if cut < 0:
+        return [], offset
+    consumed = offset + cut + 1
+    records = []
+    for raw in chunk[: cut + 1].splitlines():
+        line = raw.strip()
+        if not line.startswith(b"{"):
+            continue
+        try:
+            record = json.loads(line.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records, consumed
+
+
+def default_rotation_state():
+    """The rotation state of a gateway that has never hit a wall."""
+    return {
+        "version": 1,
+        "offset": 0,
+        "updated": 0.0,
+        "blocks": 0,
+        "successes": 0,
+        "last_block": 0.0,
+        "last_success": 0.0,
+        "scopes": {},
+        "last_egress": "",
+        "last_egress_address": "",
+        "last_egress_at": 0.0,
+        "egress_changes": 0,
+        "transport": {},
+        "breaker": {"open": False, "at": 0.0, "until": 0.0, "pause": ""},
+        "wall": {"open": False, "since": 0.0, "until": 0.0, "scopes": [], "cleared_at": 0.0, "reason": ""},
+    }
+
+
+def load_rotation_state():
+    """The persisted rotation state, or a fresh one when it is unreadable."""
+    state = default_rotation_state()
+    if not ROTATION_FILE.exists():
+        return state
+    try:
+        raw = json.loads(ROTATION_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return state
+    if not isinstance(raw, dict):
+        return state
+    for key, value in raw.items():
+        if key in ("scopes", "wall", "breaker") and isinstance(value, dict):
+            state[key].update(value)
+        elif key in state:
+            state[key] = value
+    if not isinstance(state["scopes"], dict):
+        state["scopes"] = {}
+    if not isinstance(state["transport"], dict):
+        state["transport"] = {}
+    if not isinstance(state["wall"].get("scopes"), list):
+        state["wall"]["scopes"] = []
+    return state
+
+
+def save_rotation_state(state):
+    """Write the rotation state atomically, so a crash cannot truncate it."""
+    try:
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        state["updated"] = time.time()
+        tmp = ROTATION_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2, sort_keys=True))
+        os.replace(tmp, ROTATION_FILE)
+        return True
+    except OSError:
+        return False
+
+
+def note_block(state, scope, stamp, request=""):
+    """Fold one free-tier block into the rotation state."""
+    scope = scope or "unknown"
+    state["blocks"] = int(state.get("blocks", 0) or 0) + 1
+    state["last_block"] = max(float(state.get("last_block", 0) or 0), stamp)
+    scopes = state["scopes"]
+    entry = scopes.get(scope) or {"scope": scope, "blocks": 0, "first": stamp, "last": stamp, "success": 0.0}
+    # The gateway logs one block per upstream gate, so a burst for the same
+    # scope is one wall event, not one per gate.
+    if stamp - float(entry.get("last", 0) or 0) > SAME_BLOCK_SECONDS or not entry.get("blocks"):
+        entry["blocks"] = int(entry.get("blocks", 0) or 0) + 1
+        entry.setdefault("first", stamp)
+    entry["last"] = stamp
+    entry["request"] = request
+    scopes[scope] = entry
+    return entry
+
+
+def note_success(state, scope, stamp):
+    """Fold one accepted free-lane attempt into the rotation state."""
+    state["successes"] = int(state.get("successes", 0) or 0) + 1
+    state["last_success"] = max(float(state.get("last_success", 0) or 0), stamp)
+    if scope:
+        scopes = state["scopes"]
+        entry = scopes.get(scope) or {"scope": scope, "blocks": 0, "first": stamp, "last": stamp}
+        entry["success"] = stamp
+        scopes[scope] = entry
+    breaker = state.get("breaker") or {}
+    if breaker.get("open") and stamp > float(breaker.get("at", 0) or 0):
+        # A request got through, so the lane is not paused any more. The
+        # gateway reopens the breaker by itself when it has to.
+        breaker["open"] = False
+        breaker["until"] = 0.0
+    wall = state["wall"]
+    if wall.get("open") and stamp > float(wall.get("since", 0) or 0):
+        # A request got through after the wall, so the allowance follows the
+        # address again. evaluate_rotation closes it once every block is older
+        # than this success.
+        wall["pending_clear"] = True
+
+
+def clear_wall(state, stamp, reason):
+    """Close the wall and remember why, so the report can explain it."""
+    wall = state["wall"]
+    wall["open"] = False
+    wall["cleared_at"] = stamp
+    wall["reason"] = reason
+
+
+def open_wall(state, now, scopes, since=None):
+    """Pause rotation until the daily reset, because addresses no longer help.
+
+    The wall starts at the block that opened it, so a request that is accepted
+    afterwards proves the lane is back. It ends at the next 00:00 UTC.
+    """
+    wall = state["wall"]
+    wall["open"] = True
+    wall["since"] = since if since else now
+    wall["until"] = next_utc_midnight(now).timestamp()
+    wall["scopes"] = list(scopes)
+    wall["reason"] = "two addresses refused"
+    wall["cleared_at"] = 0.0
+
+
+def prune_scopes(state, stamp):
+    """Forget scopes that can no longer change a decision."""
+    scopes = state["scopes"]
+    for name, entry in list(scopes.items()):
+        last = max(float(entry.get("last", 0) or 0), float(entry.get("success", 0) or 0))
+        if stamp - last > SCOPE_RETENTION:
+            del scopes[name]
+    if len(scopes) > MAX_SCOPES:
+        ordered = sorted(
+            scopes.items(),
+            key=lambda item: max(float(item[1].get("last", 0) or 0), float(item[1].get("success", 0) or 0)),
+        )
+        for name, _ in ordered[: len(scopes) - MAX_SCOPES]:
+            del scopes[name]
+
+
+def fold_rotation(state, records, now=None):
+    """Apply the gateway events the rotation state has not seen yet."""
+    now = now if now is not None else time.time()
+    for record in records:
+        event = str(record.get("event", ""))
+        stamp = record_time(record) or now
+        if event == WALL_EVENT:
+            scope = egress_scope(record.get("proxy", ""))
+            note_block(state, scope, stamp, str(record.get("request_id", "") or ""))
+        elif event == SUCCESS_EVENT:
+            scope = egress_scope(record.get("proxy", ""))
+            note_success(state, scope, stamp)
+        elif event in TRANSPORT_EVENTS:
+            transport = state.setdefault("transport", {})
+            entry = transport.get(event) or {"count": 0, "last": 0.0, "detail": ""}
+            entry["count"] = int(entry.get("count", 0) or 0) + 1
+            entry["last"] = max(float(entry.get("last", 0) or 0), stamp)
+            detail = str(record.get("error", "") or record.get("status", "") or "").strip()
+            if detail:
+                entry["detail"] = detail[:160]
+            transport[event] = entry
+        elif event == WALL_BREAKER:
+            breaker = state.setdefault("breaker", {})
+            breaker["open"] = True
+            breaker["at"] = max(float(breaker.get("at", 0) or 0), stamp)
+            breaker["pause"] = str(record.get("paused_for", "") or "")
+            breaker.setdefault("until", 0.0)
+    return state
+
+
+def evaluate_rotation(state, now=None):
+    """Decide what the free lane is doing from the folded state."""
+    now = now if now is not None else time.time()
+    wall = state["wall"]
+    scopes = state["scopes"]
+    last_success = float(state.get("last_success", 0) or 0)
+    recent = [
+        name for name, entry in scopes.items()
+        if float(entry.get("last", 0) or 0) and now - float(entry.get("last", 0) or 0) <= REWALL_SECONDS
+    ]
+    # A block that arrived before the last accepted request has already been
+    # answered by a working exit, so it is history, not evidence about the
+    # allowance. This is also what lets the wall close without reopening.
+    blocked_recent = [
+        name for name in recent
+        if float(scopes[name].get("last", 0) or 0) > max(
+            float(scopes[name].get("success", 0) or 0), last_success
+        )
+    ]
+    if not wall.get("open") and len(blocked_recent) >= FREE_WALL_EXITS:
+        # The wall starts with the last block, not with the moment it was
+        # noticed: the log may be folded several minutes later.
+        opened = max(float(scopes[name].get("last", 0) or 0) for name in blocked_recent)
+        open_wall(state, now, blocked_recent, since=opened)
+    if wall.get("open") and now >= float(wall.get("until", 0) or 0):
+        # The daily allowance reset. The wall is no longer a reason to hold
+        # back, but only a request can prove the lane works again.
+        clear_wall(state, now, "the daily reset passed")
+    elif wall.get("open") and len(blocked_recent) < FREE_WALL_EXITS and last_success > float(wall.get("since", 0) or 0):
+        clear_wall(state, now, "a fresh address answered")
+    wall.pop("pending_clear", None)
+    breaker = state.get("breaker") or {}
+    last_block = float(state.get("last_block", 0) or 0)
+    stale = bool(last_block) and now - last_block > REWALL_SECONDS
+    state["view"] = {
+        "blocks": int(state.get("blocks", 0) or 0),
+        "successes": int(state.get("successes", 0) or 0),
+        "scopes": sorted(scopes),
+        "recent": sorted(blocked_recent),
+        "recent_distinct": len(blocked_recent),
+        "distinct": len(scopes),
+        "last_block": last_block,
+        "last_success": last_success,
+        "stale": stale,
+        "breaker": bool(breaker.get("open")),
+        "breaker_pause": str(breaker.get("pause", "") or ""),
+        "wall": dict(wall),
+        "transport": dict(state.get("transport") or {}),
+        "recovered": bool(last_success) and last_success > last_block,
+    }
+    state["view"]["following"] = bool(state["view"]["wall"].get("open")) or (
+        not stale and state["view"]["recent_distinct"] >= FREE_WALL_EXITS
+    )
+    return state
+
+
+def rotation_state(refresh=True):
+    """The rotation state, after folding whatever the gateway logged since."""
+    state = load_rotation_state()
+    if refresh:
+        records, offset = read_log_lines(int(state.get("offset", 0) or 0))
+        if records:
+            fold_rotation(state, records)
+        state["offset"] = offset
+        evaluate_rotation(state)
+        prune_scopes(state, time.time())
+        save_rotation_state(state)
+    else:
+        evaluate_rotation(state)
+    return state
+
+
+def wall_state():
+    """What the free tier did to this gateway, read from the gateway log.
+
+    The gateway logs the egress scope of every exit the free tier refused, so
+    the number of distinct scopes says how many addresses were tried. Two
+    different ones inside the rewall window mean the allowance is not
+    following the address: only the daily reset clears that.
+    """
+    view = rotation_state()["view"]
+    return {
+        "blocks": view["blocks"],
+        "egresses": view["scopes"][-8:],
+        "distinct": view["distinct"],
+        "recent_distinct": view["recent_distinct"],
+        "breaker": view["breaker"],
+        "breaker_pause": view["breaker_pause"],
+        "last_block": view["last_block"],
+        "last_success": view["last_success"],
+        "stale": view["stale"],
+        "following": view["following"],
+        "wall": view["wall"],
+        "transport": view["transport"],
+        "recovered": view["recovered"],
+    }
+
+
+def next_utc_midnight(stamp=None):
+    """The next 00:00 UTC after stamp, when the free allowance resets."""
+    if stamp is None:
+        now = datetime.now(timezone.utc)
+    else:
+        now = datetime.fromtimestamp(stamp, timezone.utc)
+    midnight = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1)
+    return midnight
+
+
+def wall_until_text(wall):
+    """The reset time of an open wall, as UTC and as the local clock."""
+    until = float(wall.get("until", 0) or 0)
+    if not until:
+        return ""
+    moment = datetime.fromtimestamp(until, timezone.utc)
+    return f"{moment.strftime('%H:%M UTC')} ({moment.astimezone().strftime('%H:%M')} your time)"
+
+
+def wall_report():
+    """Say where the free allowance stands, and what to do about it."""
+    section("free wall")
+    state = wall_state()
+    wall = state["wall"]
+
+    if not state["blocks"] and not wall.get("open") and not state["breaker"]:
+        ok("no free tier block in the log")
+        info("the free lane is working")
+        return state
+
+    info(f"blocked exits      : {state['blocks']}")
+    info(f"distinct addresses : {state['distinct']}")
+    if state["egresses"]:
+        info("last scopes        : " + ", ".join(state["egresses"][-3:]))
+    if state["breaker"]:
+        pause = state["breaker_pause"] or "a while"
+        warn(f"the gateway paused the free lane for {pause}")
+
+    if wall.get("open"):
+        err("rotation is paused until the allowance resets")
+        info("two different addresses were refused in a row, so rotating again will not help")
+        reset = wall_until_text(wall)
+        if reset:
+            info(f"the allowance resets at {reset}")
+        info("use another provider, or wait for the reset")
+    elif wall.get("cleared_at") and wall.get("reason") == "the daily reset passed":
+        ok("the daily reset passed, the lane can rotate again")
+        info("send a request to confirm: opencode-proxy test")
+    elif wall.get("cleared_at"):
+        ok(f"the wall cleared: {wall.get('reason')}")
+    elif state["stale"]:
+        ok("the last block is old, the lane recovered on its own")
+    elif state["recovered"]:
+        ok("a fresh address answered after the block, the lane recovered")
+    else:
+        warn("one address was refused, the gateway rotates to the next one")
+        info("the gateway handles this on its own, try the request again")
+
+    return state
+
+
+def rotation_report():
+    """Show the persisted rotation state and what it means."""
+    section("rotation")
+    state = rotation_state()
+    view = state["view"]
+    wall = view["wall"]
+    last = state.get("last_block") or 0
+    success = state.get("last_success") or 0
+    info(f"tracked scopes : {view['distinct']}")
+    info(f"blocked exits  : {view['blocks']}")
+    info(f"accepted exits : {view['successes']}")
+    if last:
+        info(f"last block     : {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(last)))}")
+    if success:
+        info(f"last success   : {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(float(success)))}")
+    if view["recent"]:
+        info("blocked /64s   : " + ", ".join(name.replace("warp:", "") for name in view["recent"][-4:]))
+    if wall.get("open"):
+        warn("state: paused until the allowance resets")
+        reset = wall_until_text(wall)
+        if reset:
+            info(f"resets at    : {reset}")
+        info("rotation is skipped on purpose; a restart will not help")
+    elif wall.get("cleared_at") and wall.get("reason") == "the daily reset passed":
+        ok("state: ready to rotate again")
+        info("confirm with: opencode-proxy test")
+    elif view["stale"]:
+        ok("state: idle, the last block is old")
+    elif state.get("blocks"):
+        warn("state: rotating, the gateway moves to the next exit")
+    else:
+        ok("state: idle, no block recorded")
+    transport = view.get("transport") or {}
+    if transport:
+        total = sum(int(entry.get("count", 0) or 0) for entry in transport.values())
+        info(f"transport     : {total} failure(s) in the last log window")
+        for event, entry in sorted(transport.items(), key=lambda kv: -int(kv[1].get("count", 0) or 0))[:3]:
+            line = f"  {event.replace('_', ' ')}: {entry.get('count', 0)}"
+            detail = str(entry.get("detail", "") or "").strip()
+            if detail:
+                line += f" ({detail[:60]})"
+            info(line)
+    if not ROTATION_FILE.exists():
+        info("no state file yet, it is written on the first block")
+    else:
+        info(f"state file     : {ROTATION_FILE}")
+    return state
+
+
+def do_rotation(action=""):
+    """Inspect or reset the persisted rotation state."""
+    action = (action or "status").lower()
+    if action in ("status", "show", ""):
+        rotation_report()
+        return
+    if action in ("reset", "clear"):
+        state = default_rotation_state()
+        state["offset"] = LOG_FILE.stat().st_size if LOG_FILE.exists() else 0
+        save_rotation_state(state)
+        ok("rotation state cleared, the log offset was kept")
+        info("the gateway rotates on the next block again")
+        return
+    if action in ("check", "verify"):
+        state = rotation_report()
+        print()
+        wall_report()
+        return state
+    err(f"unknown rotation action: {action}")
+    info("usage: opencode-proxy rotation {status|check|reset}")
+
+
+def do_wall():
+    """Report the free tier wall and what clears it."""
+    state = wall_report()
+    print()
+    rotation_report()
+    print()
+    if state["blocks"]:
+        info("more detail: opencode-proxy logs")
+        info("full check: opencode-proxy bypass check")
+    return
+
+
+# Public address echo services. The free tier counts one allowance per /64 on
+# IPv6 and per /32 on IPv4, so the scope of the address is what matters, not
+# the full address.
+EGRESS_ENDPOINTS = (
+    "https://api6.ipify.org",
+    "https://api64.ipify.org",
+    "https://icanhazip.com",
+)
+EGRESS_TIMEOUT = 6
+
+
+def public_egress(proxy=""):
+    """The public address this machine leaves from, or why it could not tell.
+
+    A SOCKS proxy is used when the gateway config lists one, because that is
+    the route the requests take. Nothing is guessed: an answer that is not an
+    address is ignored, and the first real answer wins.
+    """
+    if proxy:
+        handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        opener = urllib.request.build_opener(handler)
+    else:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    problem = ""
+    for endpoint in EGRESS_ENDPOINTS:
+        try:
+            request = urllib.request.Request(endpoint, headers={"User-Agent": "opencode-proxy"})
+            with opener.open(request, timeout=EGRESS_TIMEOUT) as resp:
+                body = resp.read(256).decode("utf-8", errors="replace").strip()
+        except Exception as exc:
+            problem = f"{type(exc).__name__}: {exc}"
+            continue
+        try:
+            address = ipaddress.ip_address(body)
+        except ValueError:
+            problem = f"{endpoint} answered {body[:40]!r}, not an address"
+            continue
+        return address, ""
+    return None, problem or "no address echo answered"
+
+
+def warp_proxy_hint():
+    """The SOCKS route the gateway itself uses, when the config names one."""
+    config = gateway_config()
+    for entry in config.get("proxies") or []:
+        text = str(entry or "").strip()
+        if text.startswith(("socks5://", "socks5h://")):
+            return text
+    return ""
+
+
+def record_egress(scope, address):
+    """Remember the last confirmed public scope, and whether it changed."""
+    state = load_rotation_state()
+    previous = str(state.get("last_egress", "") or "")
+    state["last_egress"] = scope
+    state["last_egress_address"] = str(address)
+    state["last_egress_at"] = time.time()
+    state["egress_changes"] = int(state.get("egress_changes", 0) or 0)
+    changed = bool(previous) and previous != scope
+    if changed:
+        state["egress_changes"] += 1
+    save_rotation_state(state)
+    return previous, changed
+
+
+def do_egress():
+    """Confirm the public egress and whether its quota scope really changed."""
+    section("egress")
+    config = gateway_config()
+    warp = config.get("warp") or {}
+    if warp.get("enabled"):
+        info(f"warp      : on (stack {warp.get('stack', 'ipv6')}, pool {warp.get('pool_size', 2)})")
+    else:
+        warn("warp is off, requests leave from this machine's address")
+
+    proxy = warp_proxy_hint()
+    if proxy:
+        info(f"route     : {proxy}")
+    else:
+        info("route     : direct")
+
+    address, problem = public_egress(proxy)
+    if address is None:
+        err("could not read the public address")
+        info(problem)
+        info("the echo services may be blocked here; the gateway still reports its own exits")
+        return
+    scope = egress_scope(str(address))
+    ok(f"public ip : {address}")
+    info(f"quota /64 : {scope.replace('warp:', '')}")
+
+    previous, changed = record_egress(scope, address)
+    if not previous:
+        info("first confirmation, the next one is compared against this scope")
+    elif changed:
+        ok(f"the scope changed from {previous.replace('warp:', '')}")
+        info("a new /64 means the next request starts with a fresh allowance")
+        if (wall_state().get("wall") or {}).get("open"):
+            info("the wall is still open until the daily reset; a new scope alone is not proof")
+    else:
+        warn(f"the scope is the same as the last confirmation ({previous.replace('warp:', '')})")
+        info("reconnecting WARP inside the same /64 does not rotate the allowance")
+
+    if address.version == 4 and warp.get("stack") == "ipv6":
+        warn("the answer is IPv4 although the stack is ipv6")
+        info("the tunnel may be down; the free tier counts the IPv4 /32 in that case")
 
 
 def gateway_health():
@@ -1198,6 +2101,22 @@ def gateway_health():
             return {}
     except Exception:
         return {}
+
+
+def wall_note():
+    """One line about the free wall, for the reports that already talk."""
+    wall = wall_state()
+    wall_data = wall.get("wall") or {}
+    if wall_data.get("open"):
+        reset = wall_until_text(wall_data)
+        err("the free tier is refusing every address")
+        info(("the allowance resets at " + reset) if reset else "the allowance resets at 00:00 UTC")
+        info("rotating will not help; use another provider or wait")
+    elif wall["blocks"] and not wall["stale"]:
+        warn(f"the free tier refused {wall['blocks']} exit(s)")
+        info("the gateway rotates to the next address on its own")
+    elif wall_data.get("cleared_at"):
+        ok("the free wall has cleared, the lane can rotate again")
 
 
 def bypass_report():
@@ -1231,6 +2150,7 @@ def bypass_report():
     if not health:
         err("the gateway does not answer on " + API_URL)
         info("start it with: opencode-proxy start")
+        wall_note()
         return False
 
     status = health.get("status", "?")
@@ -1277,6 +2197,8 @@ def bypass_report():
         err(problem[0])
         info(problem[1])
 
+    wall_note()
+
     return ready and exposed > 0
 
 
@@ -1304,6 +2226,16 @@ def do_bypass(action="status"):
         return
 
     if action in ("fix", "repair"):
+        wall = wall_state()
+        if (wall.get("wall") or {}).get("open"):
+            reset = wall_until_text(wall["wall"])
+            err("the free tier is refusing every address, a restart will not help")
+            if reset:
+                info(f"the allowance resets at {reset}")
+            info("fix the rest now, so the lane is ready when it opens:")
+            fix_certs()
+            bypass_report()
+            return
         fix_certs()
         do_fix_dns()
         restart_daemon()
@@ -1617,6 +2549,22 @@ def do_doctor():
         if issues:
             checks.append(("gateway issues", ", ".join(issues), False))
 
+    wall = wall_state()
+    if wall["blocks"]:
+        if wall["following"] and not wall["stale"]:
+            reset = next_utc_midnight()
+            checks.append((
+                "free tier wall",
+                f"the allowance is not following the address, resets at {reset.strftime('%H:%M UTC')}",
+                False,
+            ))
+        else:
+            checks.append((
+                "free tier wall",
+                f"{wall['blocks']} exit(s) refused, {wall['distinct']} address(es)",
+                True,
+            ))
+
     checks.append(("thinking mode", thinking_indicator(), True))
 
     failed = []
@@ -1849,7 +2797,8 @@ def do_uninstall():
     section("uninstalling")
     stop_daemon()
 
-    for path in (PID_FILE, LOG_FILE, CONFIG_FILE, ENGINE_BIN, OPENCODE_BIN,
+    for path in (PID_FILE, LOG_FILE, CONFIG_FILE, ROTATION_FILE, LANE_PID_FILE,
+                 LANE_STATE_FILE, LANE_LOG_FILE, ENGINE_BIN, OPENCODE_BIN,
                  OPENCODE_WRAPPER, MANAGER_FILE, OPENCODE_UNLIMITED, OPENCODE_JSONC):
         try:
             if path.exists():
@@ -1896,6 +2845,11 @@ def do_watchdog():
     """
     section("watchdog")
     info("watching the proxy, ctrl+c to stop")
+    wall = wall_state()
+    if (wall.get("wall") or {}).get("open"):
+        reset = wall_until_text(wall["wall"])
+        warn("the free tier wall is open" + (f" until {reset}" if reset else ""))
+        info("the watchdog keeps the gateway up, it does not rotate past the wall")
     try:
         while True:
             health = gateway_health()
@@ -1967,8 +2921,12 @@ case "$1" in
     rate-limit) python3 "$SETUP" rate-limit ;;
     autostart) python3 "$SETUP" autostart "${2:-}" ;;
     bypass)    python3 "$SETUP" bypass "${2:-status}" ;;
+    wall)      python3 "$SETUP" wall ;;
+    rotation)  python3 "$SETUP" rotation "${2:-status}" ;;
+    egress)    python3 "$SETUP" egress ;;
+    lane)      python3 "$SETUP" lane "${2:-status}" ;;
     *)
-        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|fix-certs|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}|bypass {status|check|enable|disable|fix}}"
+        echo "usage: opencode-proxy {install|repair|start|stop|restart|status|test [model]|bench [model]|logs|update|uninstall|backup|restore [file]|watchdog|version|validate|models [list|best]|model <name>|config|doctor|continue|fix-dns|fix-certs|zoom-in|zoom-out|zoom-reset|thinking <mode>|rate-limit|autostart {enable|disable|status}|bypass {status|check|enable|disable|fix}|wall|rotation {status|check|reset}|egress|lane {status|start|stop}}"
         exit 1
         ;;
 esac
@@ -2296,6 +3254,8 @@ def do_install():
         failed.append("gateway binary")
     if not step("writing the configuration", write_config):
         failed.append("configuration")
+    if not step("installing the local lane", install_lane):
+        failed.append("local lane")
     if not step("writing the commands", write_manager):
         failed.append("commands")
     if not step("writing the launcher", write_unlimited_launcher):
@@ -2340,6 +3300,7 @@ def do_repair():
     else:
         step("writing the wrapper", write_opencode_wrapper)
 
+    step("installing the local lane", install_lane)
     step("writing the configuration", write_config)
     step("writing the commands", write_manager)
     step("writing the launcher", write_unlimited_launcher)
@@ -2357,6 +3318,7 @@ def do_install_dry_run():
     install_packages(dry_run=True)
     install_engine(dry_run=True)
     install_opencode_cli(dry_run=True)
+    install_lane(dry_run=True)
     info("nothing was changed")
 
 
@@ -2365,7 +3327,7 @@ ACTIONS = [
     "logs", "update", "uninstall", "backup", "restore", "watchdog", "version",
     "validate", "dry-run", "models", "model", "config", "doctor", "continue",
     "fix-dns", "fix-certs", "zoom-in", "zoom-out", "zoom-reset", "thinking",
-    "rate-limit", "autostart", "bypass",
+    "rate-limit", "autostart", "bypass", "wall", "rotation", "egress", "lane",
 ]
 
 
@@ -2439,6 +3401,14 @@ def main():
         do_autostart(args.model)
     elif action == "bypass":
         do_bypass(args.model or "status")
+    elif action == "wall":
+        do_wall()
+    elif action == "rotation":
+        do_rotation(args.model)
+    elif action == "egress":
+        do_egress()
+    elif action == "lane":
+        do_lane(args.model)
 
 
 if __name__ == "__main__":

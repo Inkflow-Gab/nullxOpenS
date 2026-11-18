@@ -137,6 +137,8 @@ type Model struct {
 	totalModels  int
 	warpText     string
 	billingText  string
+	rotationText string
+	rotationHint string
 	issueText    string
 
 	busy        bool
@@ -501,8 +503,27 @@ func (m *Model) checkHealth() tea.Cmd {
 	}
 }
 
+// applyRotation reads the controller's rotation state. The gateway has no
+// rotation endpoint, so the state file is the only source that knows whether
+// the free allowance is following the address.
+func (m *Model) applyRotation() {
+	rotation, ok := config.LoadRotation()
+	if !ok {
+		m.rotationText = ""
+		m.rotationHint = ""
+		return
+	}
+	m.rotationText = rotation.Summary()
+	m.rotationHint = ""
+	if rotation.WallOpen {
+		m.rotationText = "wall"
+		m.rotationHint = rotation.Hint()
+	}
+}
+
 func (m *Model) applyHealth(message healthMsg) {
 	document := message.document
+	m.applyRotation()
 	if message.err != nil && document.Status == "" {
 		m.healthOK = false
 		m.healthText = "gateway down"
@@ -650,6 +671,13 @@ func (m *Model) handleSlash(line string) (tea.Model, tea.Cmd) {
 			"effort: " + valueOr(m.runner.Config.ReasoningEffort, "none"),
 			"permission: " + m.runner.Config.Permission,
 			fmt.Sprintf("session: %s · %d messages", m.sess.ID, m.runner.HistoryCount()),
+		}
+		if m.rotationText != "" {
+			lines = append(lines, "rotation: "+m.rotationText)
+		}
+		if m.rotationHint != "" {
+			lines = append(lines, "free wall: "+m.rotationHint)
+			lines = append(lines, "inspect it with: opencode-proxy wall")
 		}
 		if m.issueText != "" {
 			lines = append(lines, "blocked by: "+m.issueText)
@@ -889,6 +917,13 @@ func (m *Model) statusView(width int) string {
 	}
 	line += dimStyle.Render(" · ") + billingStyle.Render(m.billingText) +
 		dimStyle.Render(" · "+m.warpText)
+	if m.rotationHint != "" {
+		// A paused rotation is the reason a request fails, so it belongs on
+		// the status line next to the billing state, not only in /status.
+		line += dimStyle.Render(" · ") + badStyle.Render("* free wall")
+	} else if m.rotationText != "" && m.rotationText != "wall" {
+		line += dimStyle.Render(" · " + m.rotationText)
+	}
 	left := dimStyle.Render("enter send · alt+enter newline · ctrl+t think · /help")
 	right := dimStyle.Render("perm:" + m.cfg.Permission)
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)

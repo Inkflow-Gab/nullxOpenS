@@ -22,7 +22,7 @@ import (
 	"github.com/Inkflow-Gab/nullxOpenS/internal/ui"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 // Run dispatches the command line.
 func Run(args []string) error {
@@ -382,6 +382,15 @@ func doctor(args []string) error {
 		}
 		if len(health.Issues) > 0 {
 			fmt.Printf("issues: %s\n", strings.Join(health.Issues, ", "))
+		}
+		if rotation, ok := config.LoadRotation(); ok && rotation.Known() {
+			fmt.Printf("rotation: %d block(s), %d accepted exit(s)\n", rotation.Blocks, rotation.Successes)
+			if summary := rotation.Summary(); summary != "" {
+				fmt.Printf("free wall: %s\n", summary)
+			}
+			if rotation.WallOpen {
+				fmt.Printf("hint: %s\n", rotation.Hint())
+			}
 		}
 		for _, issue := range health.Blocking() {
 			fmt.Printf("blocked by %s: %s\n", issue, fixFor(issue))

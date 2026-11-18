@@ -24,7 +24,7 @@ REPO="Inkflow-Gab/nullxOpenS"
 RAW="https://raw.githubusercontent.com/$REPO/main"
 API_BASE="https://api.github.com/repos/$REPO"
 NULLX_TAG="${NULLX_TAG:-}"
-NULLX_MIN_VERSION="0.4.0"
+NULLX_MIN_VERSION="0.4.1"
 
 BASE_DIR="$HOME/.opencode-proxy"
 LOCAL_BIN="$HOME/.local/bin"
@@ -98,7 +98,7 @@ release_tag() {
 if [ -z "$NULLX_TAG" ]; then
     NULLX_TAG=$(release_tag)
 fi
-[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.4.0"
+[ -n "$NULLX_TAG" ] || NULLX_TAG="v0.4.1"
 info "release: $NULLX_TAG"
 
 # --- source ----------------------------------------------------------------
@@ -120,9 +120,15 @@ mkdir -p "$BASE_DIR" "$LOCAL_BIN"
 if [ -n "$SRC_DIR" ] && [ -f "$SRC_DIR/setup.py" ]; then
     SETUP="$SRC_DIR/setup.py"
 else
-    SETUP="$(mktemp -d)/setup.py"
+    SETUP_DIR="$(mktemp -d)"
+    SETUP="$SETUP_DIR/setup.py"
     info "downloading setup.py"
     curl -fsSL "$RAW/setup.py" -o "$SETUP"
+    # The local lane proxy lives next to setup.py in the repository, so a
+    # downloaded installer has to fetch it too.
+    mkdir -p "$SETUP_DIR/scripts"
+    curl -fsSL "$RAW/scripts/lane_proxy.py" -o "$SETUP_DIR/scripts/lane_proxy.py" \
+        || warn "could not download the local lane proxy"
 fi
 chmod +x "$SETUP"
 

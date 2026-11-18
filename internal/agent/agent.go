@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/Inkflow-Gab/nullxOpenS/internal/config"
 	"github.com/Inkflow-Gab/nullxOpenS/internal/llm"
@@ -175,21 +176,40 @@ func reasoningEffort(value string) string {
 	return value
 }
 
+// nextAllowanceReset returns the next 00:00 UTC, when the free allowance
+// resets. The upstream applies the allowance to the public address that
+// leaves the gateway and counts a whole /64 as one allowance, so a fresh
+// address is normally enough. When fresh addresses keep being refused the
+// allowance is not following the address and only the reset clears it.
+func nextAllowanceReset() time.Time {
+	if rotation, ok := config.LoadRotation(); ok && rotation.WallOpen && !rotation.WallUntil.IsZero() {
+		// The controller recorded the reset when it opened the wall, so the
+		// agent quotes the same moment the reports do.
+		return rotation.WallUntil
+	}
+	now := time.Now().UTC()
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).Add(24 * time.Hour)
+}
+
 // freeTierHint recognises the errors the gateway raises when the free lane is
-// not usable: the egress IP is blocked, or the anonymous lane is paused. Both
-// clear on their own after a while, so the message says what to do instead of
-// pointing at the model.
+// not usable: the egress address is blocked, or the anonymous lane is paused.
+// Both clear on their own after a while, so the message says what to do
+// instead of pointing at the model.
 func freeTierHint(err error) string {
 	text := strings.ToLower(err.Error())
+	reset := nextAllowanceReset().Format("15:04 UTC")
 	switch {
 	case strings.Contains(text, "free tier blocked") ||
+		strings.Contains(text, "blocking free-model traffic") ||
 		strings.Contains(text, "abusive traffic") ||
 		strings.Contains(text, "abuse of traffic") ||
 		strings.Contains(text, "not available from your current network"):
-		return "the free tier blocked this exit. The gateway rotates exits on its own; wait a minute and send the request again."
+		return "the free tier refused this address. The gateway rotates to the next one on its own; send the request again in a minute. " +
+			"If it keeps refusing every address, the allowance resets at " + reset + "."
 	case strings.Contains(text, "anonymous free tier is paused") ||
 		strings.Contains(text, "anonymous lane paused"):
-		return "the gateway paused the free lane after repeated failures. Wait a few minutes, or restart it with: opencode-proxy restart"
+		return "the gateway paused the free lane after repeated failures, which means the allowance is not following the address. " +
+			"It opens again at " + reset + "; a restart only helps if the gateway itself is stuck."
 	case strings.Contains(text, "warp") && strings.Contains(text, "unavailable"):
 		return "the gateway has no WARP exit. Run: opencode-proxy fix-certs, then opencode-proxy restart"
 	}

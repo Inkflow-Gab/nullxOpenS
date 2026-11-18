@@ -27,5 +27,7 @@ jobs:
         run: go vet ./...
       - name: Installer checks
         run: |
-          python3 -m py_compile setup.py
+          python3 -m py_compile setup.py scripts/lane_proxy.py
           bash -n install.sh
+      - name: Controller tests
+        run: python3 tests/test_controller.py

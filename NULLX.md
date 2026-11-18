@@ -9,11 +9,12 @@ OpenAI Chat Completions protocol, so any OpenAI-compatible gateway works, and
 ships with first-class support for the opencode2api rotation groups (`sota` /
 `sweet`), key pools, proxy rotation, and WARP egress.
 
-> Status: v0.4.0 — Bubble Tea TUI with collapsible reasoning, live gateway and
+> Status: v0.4.1 — Bubble Tea TUI with collapsible reasoning, live gateway and
 > free-tier status, OpenCode-style commands, streaming, tools, permissions, and
-> sessions. The free lane now picks a model that can actually call tools, and
-> the agent recovers on its own when the upstream refuses a reasoning level.
-> LSP and MCP are the next layers (see Roadmap).
+> sessions. The free lane picks a model that can call tools, the agent recovers
+> on its own when the upstream refuses a reasoning level, and the rotation state
+> is persisted so a wall is reported instead of retried. LSP and MCP are the
+> next layers (see Roadmap).
 
 ## Why this exists
 
